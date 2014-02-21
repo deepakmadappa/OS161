@@ -375,9 +375,10 @@ void rwlock_destroy(struct rwlock *rwlk)
 
 void rwlock_acquire_read(struct rwlock *rwlk)
 {
-	lock_acquire(rwlk->transactionlock);
 	lock_acquire(rwlk->writelock);
 	lock_release(rwlk->writelock);
+
+	lock_acquire(rwlk->transactionlock);
 
 	rwlk->counter++;
 
@@ -394,8 +395,9 @@ void rwlock_release_read(struct rwlock *rwlk)
 }
 void rwlock_acquire_write(struct rwlock *rwlk)
 {
-	lock_acquire(rwlk->transactionlock);
 	lock_acquire(rwlk->writelock);
+
+	lock_acquire(rwlk->transactionlock);
 
 	while(rwlk->counter != 0)
 		cv_wait(rwlk->cv_writer, rwlk->transactionlock);
@@ -404,8 +406,5 @@ void rwlock_acquire_write(struct rwlock *rwlk)
 }
 void rwlock_release_write(struct rwlock *rwlk)
 {
-	lock_acquire(rwlk->transactionlock);
 	lock_release(rwlk->writelock);
-
-	lock_release(rwlk->transactionlock);
 }

@@ -346,7 +346,7 @@ index 81d2f0e..78082a2 100644
 +	return;
  }
 diff --git a/kern/thread/synch.c b/kern/thread/synch.c
-index 9a7468c..5a965d4 100644
+index 9a7468c..c406c37 100644
 --- a/kern/thread/synch.c
 +++ b/kern/thread/synch.c
 @@ -47,20 +47,20 @@
@@ -745,7 +745,7 @@ index 9a7468c..5a965d4 100644
 +	kfree(rwlk->rwlock_name);
 +	kfree(rwlk->writelock);
 +	kfree(rwlk->transactionlock);
-+	kfree(rwlk->cv_writer)
++	kfree(rwlk->cv_writer);
 +	kfree(rwlk);
 +}
 +
@@ -787,7 +787,7 @@ index 9a7468c..5a965d4 100644
  }
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..9a8d5e6
+index 0000000..0765432
 --- /dev/null
 +++ b/submit.patch
 @@ -0,0 +1,637 @@
@@ -1139,7 +1139,7 @@ index 0000000..9a8d5e6
 ++	return;
 + }
 +diff --git a/kern/thread/synch.c b/kern/thread/synch.c
-+index 9a7468c..5a965d4 100644
++index 9a7468c..c406c37 100644
 +--- a/kern/thread/synch.c
 ++++ b/kern/thread/synch.c
 +@@ -47,20 +47,20 @@
