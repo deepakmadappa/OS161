@@ -369,7 +369,7 @@ void rwlock_destroy(struct rwlock *rwlk)
 	kfree(rwlk->rwlock_name);
 	kfree(rwlk->writelock);
 	kfree(rwlk->transactionlock);
-	kfree(rwlk->cv_writer)
+	kfree(rwlk->cv_writer);
 	kfree(rwlk);
 }
 
