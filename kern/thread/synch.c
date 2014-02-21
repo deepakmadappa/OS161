@@ -293,8 +293,8 @@ cv_wait(struct cv *cv, struct lock *lock)
 	// Write this
 	KASSERT(cv != NULL);
 	KASSERT(curthread->t_in_interrupt == false);
-	lock_release(lock);
 	wchan_lock(cv->cv_wchan);
+	lock_release(lock);
 	wchan_sleep(cv->cv_wchan);
 	lock_acquire(lock);
 }
