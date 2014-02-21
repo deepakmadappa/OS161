@@ -352,6 +352,16 @@ struct rwlock * rwlock_create(const char *name)
 		kfree(rwlk);
 		return NULL;
 	}
+
+	rwlk->cv_writer = cv_create(name);
+	if(rwlk->cv_writer == NULL)
+	{
+		kfree(rwlk->transactionlock);
+		kfree(rwlk->rwlock_name);
+		kfree(rwlk->writelock);
+		kfree(rwlk);
+		return NULL;
+	}
 	return rwlk;
 }
 void rwlock_destroy(struct rwlock *rwlk)
@@ -359,6 +369,7 @@ void rwlock_destroy(struct rwlock *rwlk)
 	kfree(rwlk->rwlock_name);
 	kfree(rwlk->writelock);
 	kfree(rwlk->transactionlock);
+	kfree(rwlk->cv_writer);
 	kfree(rwlk);
 }
 
