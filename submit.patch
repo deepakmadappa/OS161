@@ -1,0 +1,596 @@
+diff --git a/kern/include/synch.h b/kern/include/synch.h
+index ac3714b..48e2d18 100644
+--- a/kern/include/synch.h
++++ b/kern/include/synch.h
+@@ -74,8 +74,10 @@ void V(struct semaphore *);
+  */
+ struct lock {
+         char *lk_name;
+-        // add what you need here
+-        // (don't forget to mark things volatile as needed)
++    	struct wchan *lk_wchan;
++    	struct spinlock lk_lock;
++        volatile bool lk_held;
++        volatile struct thread *lk_holder;
+ };
+ 
+ struct lock *lock_create(const char *name);
+@@ -113,7 +115,8 @@ void lock_destroy(struct lock *);
+ 
+ struct cv {
+         char *cv_name;
+-        // add what you need here
++        struct wchan *cv_wchan;
++         // add what you need here
+         // (don't forget to mark things volatile as needed)
+ };
+ 
+@@ -143,6 +146,10 @@ void cv_broadcast(struct cv *cv, struct lock *lock);
+ 
+ struct rwlock {
+         char *rwlock_name;
++        volatile int counter;
++        struct lock *writelock;
++        struct lock *transactionlock;
++        struct cv *cv_writer;
+ };
+ 
+ struct rwlock * rwlock_create(const char *);
+diff --git a/kern/include/test.h b/kern/include/test.h
+index 240d583..dac590f 100644
+--- a/kern/include/test.h
++++ b/kern/include/test.h
+@@ -66,7 +66,6 @@ void whalemating_cleanup(void);
+ void inQuadrant(int);
+ void leaveIntersection(void);
+ int stoplight(int, char **);
+-
+ void gostraight(void *, unsigned long);
+ void turnleft(void *, unsigned long);
+ void turnright(void *, unsigned long);
+diff --git a/kern/startup/main.c b/kern/startup/main.c
+index be4c4b8..3caf42b 100644
+--- a/kern/startup/main.c
++++ b/kern/startup/main.c
+@@ -100,7 +100,7 @@ boot(void)
+ 	kprintf("%s", harvard_copyright);
+ 	kprintf("\n");
+ 
+-	kprintf("Put-your-group-name-here's system version %s (%s #%d)\n", 
++	kprintf("anandpra@buffalo.edu's system version %s (%s #%d)\n", 
+ 		GROUP_VERSION, buildconfig, buildversion);
+ 	kprintf("\n");
+ 
+diff --git a/kern/synchprobs/drivers.c b/kern/synchprobs/drivers.c
+index 02e336f..a4ba023 100644
+--- a/kern/synchprobs/drivers.c
++++ b/kern/synchprobs/drivers.c
+@@ -86,15 +86,15 @@ int whalemating(int nargs, char **args) {
+ 
+ 			switch (i) {
+ 			case 0:
+-				snprintf(name, sizeof(name), "Male Whale Thread %d", (i * 3) + j);
++				snprintf(name, sizeof(name), "Male Whale Thread %d", (i * 10) + j);
+ 				err = thread_fork(name, male, whalematingMenuSemaphore, j, NULL);
+ 				break;
+ 			case 1:
+-				snprintf(name, sizeof(name), "Female Whale Thread %d", (i * 3) + j);
++				snprintf(name, sizeof(name), "Female Whale Thread %d", (i * 10) + j);
+ 				err = thread_fork(name, female, whalematingMenuSemaphore, j, NULL);
+ 				break;
+ 			case 2:
+-				snprintf(name, sizeof(name), "Matchmaker Whale Thread %d", (i * 3) + j);
++				snprintf(name, sizeof(name), "Matchmaker Whale Thread %d", (i * 10) + j);
+ 				err = thread_fork(name, matchmaker, whalematingMenuSemaphore, j, NULL);
+ 				break;
+ 			}
+diff --git a/kern/synchprobs/problems.c b/kern/synchprobs/problems.c
+index 81d2f0e..78082a2 100644
+--- a/kern/synchprobs/problems.c
++++ b/kern/synchprobs/problems.c
+@@ -47,63 +47,98 @@
+ // functions will allow you to do local initialization. They are called at
+ // the top of the corresponding driver code.
+ 
++static void getquadrants(unsigned long, int *);
++
++struct cv *cvWaitingMales;
++struct cv *cvWaitingFemales;
++struct semaphore *semMale;
++struct semaphore *semFemale;
++struct lock *lkMale;
++struct lock *lkFemale;
++
++
+ void whalemating_init() {
+-  return;
++	cvWaitingMales = cv_create("waitingmales");
++	cvWaitingFemales = cv_create("waitingfemales");
++	semMale = sem_create("semMale",0);
++	semFemale = sem_create("semFemale",0);
++	lkMale = lock_create("lkMale");
++	lkFemale = lock_create("lkFemale");
++	return;
+ }
+ 
+ // 20 Feb 2012 : GWA : Adding at the suggestion of Nikhil Londhe. We don't
+ // care if your problems leak memory, but if you do, use this to clean up.
+ 
+ void whalemating_cleanup() {
+-  return;
++	sem_destroy(semMale);
++	sem_destroy(semFemale);
++	cv_destroy(cvWaitingMales);
++	cv_destroy(cvWaitingFemales);
++	lock_destroy(lkMale);
++	lock_destroy(lkFemale);
++	return;
+ }
+ 
+ void
+ male(void *p, unsigned long which)
+ {
+ 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
+-  (void)which;
+-  
+-  male_start();
+-	// Implement this function 
+-  male_end();
+-
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // whalemating driver can return to the menu cleanly.
+-  V(whalematingMenuSemaphore);
+-  return;
++	(void)which;
++
++	male_start();
++	V(semMale);
++	lock_acquire(lkMale);
++	cv_wait(cvWaitingMales, lkMale);
++	lock_release(lkMale);
++	male_end();
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// whalemating driver can return to the menu cleanly.
++	V(whalematingMenuSemaphore);
++	return;
+ }
+ 
+ void
+ female(void *p, unsigned long which)
+ {
+ 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
+-  (void)which;
+-  
+-  female_start();
+-	// Implement this function 
+-  female_end();
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // whalemating driver can return to the menu cleanly.
+-  V(whalematingMenuSemaphore);
+-  return;
++	(void)which;
++
++	female_start();
++	V(semFemale);
++	lock_acquire(lkFemale);
++	cv_wait(cvWaitingFemales, lkFemale);
++	lock_release(lkFemale);
++
++	female_end();
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// whalemating driver can return to the menu cleanly.
++	V(whalematingMenuSemaphore);
++	return;
+ }
+ 
+ void
+ matchmaker(void *p, unsigned long which)
+ {
+ 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
+-  (void)which;
+-  
+-  matchmaker_start();
+-	// Implement this function 
+-  matchmaker_end();
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // whalemating driver can return to the menu cleanly.
+-  V(whalematingMenuSemaphore);
+-  return;
++	(void)which;
++
++	matchmaker_start();
++	P(semMale);
++	P(semFemale);
++	lock_acquire(lkMale);
++	lock_acquire(lkFemale);
++	cv_signal(cvWaitingMales,lkMale);
++
++	cv_signal(cvWaitingFemales,lkFemale);
++	matchmaker_end();
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// whalemating driver can return to the menu cleanly.
++	V(whalematingMenuSemaphore);
++	return;
+ }
+ 
+ /*
+@@ -137,49 +172,106 @@ matchmaker(void *p, unsigned long which)
+ // functions will allow you to do local initialization. They are called at
+ // the top of the corresponding driver code.
+ 
++struct lock *lkPlanning;
++struct lock *lkQuadrant[4];
++
+ void stoplight_init() {
+-  return;
++	lkQuadrant[0] = lock_create("lkZero");
++	lkQuadrant[1] = lock_create("lkOne");
++	lkQuadrant[2] = lock_create("lkTwo");
++	lkQuadrant[3] = lock_create("lkThree");
++	lkPlanning = lock_create("lkPlanning");
++	return;
+ }
+ 
+ // 20 Feb 2012 : GWA : Adding at the suggestion of Nikhil Londhe. We don't
+ // care if your problems leak memory, but if you do, use this to clean up.
+ 
+ void stoplight_cleanup() {
+-  return;
++	lock_destroy(lkQuadrant[0]);
++	lock_destroy(lkQuadrant[1]);
++	lock_destroy(lkQuadrant[2]);
++	lock_destroy(lkQuadrant[3]);
++	lock_destroy(lkPlanning);
++	return;
++}
++
++void getquadrants(unsigned long direction, int* ret)
++{
++	ret[0] = direction;
++	ret[1] = (direction + 3) % 4;
++	ret[2] = (direction  + 2) % 4;
++
+ }
+ 
+ void
+ gostraight(void *p, unsigned long direction)
+ {
+ 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
+-  (void)direction;
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // stoplight driver can return to the menu cleanly.
+-  V(stoplightMenuSemaphore);
+-  return;
++
++	int quad[3];
++	getquadrants(direction, quad);
++
++	lock_acquire(lkPlanning);
++
++	lock_acquire(lkQuadrant[quad[0]]);
++	lock_acquire(lkQuadrant[quad[1]]);
++
++	lock_release(lkPlanning);
++	inQuadrant(quad[0]);
++	inQuadrant(quad[1]);
++	lock_release(lkQuadrant[quad[0]]);
++	leaveIntersection();
++	lock_release(lkQuadrant[quad[1]]);
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// stoplight driver can return to the menu cleanly.
++	V(stoplightMenuSemaphore);
++	return;
+ }
+ 
+ void
+ turnleft(void *p, unsigned long direction)
+ {
+ 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
+-  (void)direction;
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // stoplight driver can return to the menu cleanly.
+-  V(stoplightMenuSemaphore);
+-  return;
++	int quad[3];
++	getquadrants(direction, quad);
++
++	lock_acquire(lkPlanning);
++
++	lock_acquire(lkQuadrant[quad[0]]);
++	lock_acquire(lkQuadrant[quad[1]]);
++	lock_acquire(lkQuadrant[quad[2]]);
++
++	lock_release(lkPlanning);
++	inQuadrant(quad[0]);
++	inQuadrant(quad[1]);
++	lock_release(lkQuadrant[quad[0]]);
++	inQuadrant(quad[2]);
++	lock_release(lkQuadrant[quad[1]]);
++	leaveIntersection();
++	lock_release(lkQuadrant[quad[2]]);
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// stoplight driver can return to the menu cleanly.
++	V(stoplightMenuSemaphore);
++	return;
+ }
+ 
+ void
+ turnright(void *p, unsigned long direction)
+ {
+ 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
+-  (void)direction;
+ 
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // stoplight driver can return to the menu cleanly.
+-  V(stoplightMenuSemaphore);
+-  return;
++	lock_acquire(lkPlanning);
++
++	lock_acquire(lkQuadrant[direction]);
++	inQuadrant(direction);
++	leaveIntersection();
++	lock_release(lkQuadrant[direction]);
++
++	lock_release(lkPlanning);
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// stoplight driver can return to the menu cleanly.
++	V(stoplightMenuSemaphore);
++	return;
+ }
+diff --git a/kern/thread/synch.c b/kern/thread/synch.c
+index 9a7468c..da85333 100644
+--- a/kern/thread/synch.c
++++ b/kern/thread/synch.c
+@@ -163,9 +163,17 @@ lock_create(const char *name)
+                 return NULL;
+         }
+         
+-        // add stuff here as needed
+-        
+-        return lock;
++    	lock->lk_wchan = wchan_create(lock->lk_name);
++    	if (lock->lk_wchan == NULL) {
++    		kfree(lock->lk_name);
++    		kfree(lock);
++    		return NULL;
++    	}
++
++    	spinlock_init(&lock->lk_lock);
++            lock->lk_held = false;
++
++            return lock;
+ }
+ 
+ void
+@@ -173,7 +181,10 @@ lock_destroy(struct lock *lock)
+ {
+         KASSERT(lock != NULL);
+ 
+-        // add stuff here as needed
++
++	/* wchan_cleanup will assert if anyone's waiting on it */
++        spinlock_cleanup(&lock->lk_lock);
++        wchan_destroy(lock->lk_wchan);
+         
+         kfree(lock->lk_name);
+         kfree(lock);
+@@ -182,27 +193,55 @@ lock_destroy(struct lock *lock)
+ void
+ lock_acquire(struct lock *lock)
+ {
+-        // Write this
+-
+-        (void)lock;  // suppress warning until code gets written
++    KASSERT(lock != NULL);
++
++    /*
++     * May not block in an interrupt handler.
++     *
++     * For robustness, always check, even if we can actually
++     * complete the acquire without blocking.
++     */
++    KASSERT(curthread->t_in_interrupt == false);
++
++spinlock_acquire(&lock->lk_lock);
++    while (lock->lk_held == true) {
++	wchan_lock(lock->lk_wchan);
++	spinlock_release(&lock->lk_lock);
++            wchan_sleep(lock->lk_wchan);
++
++	spinlock_acquire(&lock->lk_lock);
++    }
++    KASSERT(lock->lk_held == false);
++    lock->lk_held = true;
++    lock->lk_holder = curthread;
++spinlock_release(&lock->lk_lock);
+ }
+ 
+ void
+ lock_release(struct lock *lock)
+ {
+-        // Write this
+-
+-        (void)lock;  // suppress warning until code gets written
++    KASSERT(lock != NULL);
++//    KASSERT(lock_do_i_hold(lock));
++	spinlock_acquire(&lock->lk_lock);
++
++		lock->lk_held = false;
++		KASSERT(lock->lk_held == false);
++	wchan_wakeone(lock->lk_wchan);
++	lock->lk_holder = NULL;
++	spinlock_release(&lock->lk_lock);
+ }
+ 
+ bool
+ lock_do_i_hold(struct lock *lock)
+ {
+-        // Write this
++    KASSERT(lock != NULL);
++    bool returnValue = false;
++	spinlock_acquire(&lock->lk_lock);
+ 
+-        (void)lock;  // suppress warning until code gets written
++		returnValue = lock->lk_held && (curthread == lock->lk_holder);
+ 
+-        return true; // dummy until code gets written
++	spinlock_release(&lock->lk_lock);
++	return returnValue;
+ }
+ 
+ ////////////////////////////////////////////////////////////
+@@ -227,8 +266,14 @@ cv_create(const char *name)
+         }
+         
+         // add stuff here as needed
+-        
+-        return cv;
++
++        cv->cv_wchan=wchan_create(cv->cv_name);
++		if (cv->cv_wchan == NULL) {
++			kfree(cv->cv_name);
++			kfree(cv);
++			return NULL;
++		}
++       return cv;
+ }
+ 
+ void
+@@ -236,8 +281,8 @@ cv_destroy(struct cv *cv)
+ {
+         KASSERT(cv != NULL);
+ 
+-        // add stuff here as needed
+-        
++        /* wchan_cleanup will assert if anyone's waiting on it */
++        wchan_destroy(cv->cv_wchan);
+         kfree(cv->cv_name);
+         kfree(cv);
+ }
+@@ -246,22 +291,111 @@ void
+ cv_wait(struct cv *cv, struct lock *lock)
+ {
+         // Write this
+-        (void)cv;    // suppress warning until code gets written
+-        (void)lock;  // suppress warning until code gets written
++        KASSERT(cv != NULL);
++        KASSERT(curthread->t_in_interrupt == false);
++        lock_release(lock);
++        wchan_lock(cv->cv_wchan);
++        wchan_sleep(cv->cv_wchan);
++       	lock_acquire(lock);
+ }
+ 
+ void
+ cv_signal(struct cv *cv, struct lock *lock)
+ {
+-        // Write this
+-	(void)cv;    // suppress warning until code gets written
+-	(void)lock;  // suppress warning until code gets written
++	(void)lock;
++	KASSERT(cv != NULL);
++	//lock_acquire(lock);
++	wchan_wakeone(cv->cv_wchan);
++	lock_release(lock);
+ }
+ 
+ void
+ cv_broadcast(struct cv *cv, struct lock *lock)
+ {
++	(void)lock;
+ 	// Write this
+-	(void)cv;    // suppress warning until code gets written
+-	(void)lock;  // suppress warning until code gets written
++	KASSERT(cv != NULL);
++	//lock_acquire(lock);
++	wchan_wakeall(cv->cv_wchan);
++	lock_release(lock);
++
++}
++
++struct rwlock * rwlock_create(const char *name)
++{
++    struct rwlock *rwlk;
++
++
++    rwlk = kmalloc(sizeof(struct rwlock));
++    if (rwlk == NULL) {
++            return NULL;
++    }
++
++    rwlk->rwlock_name = kstrdup(name);
++    if (rwlk->rwlock_name == NULL) {
++            kfree(rwlk);
++            return NULL;
++    }
++
++    rwlk->writelock = lock_create(name);
++	if (rwlk->writelock == NULL) {
++		kfree(rwlk->rwlock_name);
++		kfree(rwlk);
++
++		return NULL;
++	}
++
++	rwlk->transactionlock = lock_create(name);
++		if (rwlk->transactionlock == NULL) {
++			kfree(rwlk->rwlock_name);
++			kfree(rwlk->writelock);
++			kfree(rwlk);
++			return NULL;
++		}
++    return rwlk;
++}
++void rwlock_destroy(struct rwlock *rwlk)
++{
++	kfree(rwlk->rwlock_name);
++	kfree(rwlk->writelock);
++	kfree(rwlk->transactionlock);
++	kfree(rwlk);
++}
++
++void rwlock_acquire_read(struct rwlock *rwlk)
++{
++	lock_acquire(rwlk->transactionlock);
++	lock_acquire(rwlk->writelock);
++	lock_release(rwlk->writelock);
++
++	rwlk->counter++;
++
++	lock_release(rwlk->transactionlock);
++}
++void rwlock_release_read(struct rwlock *rwlk)
++{
++	lock_acquire(rwlk->transactionlock);
++	rwlk->counter--;
++
++	if(rwlk->counter==0)
++		cv_signal(rwlk->cv_writer, rwlk->transactionlock);
++	else
++		lock_release(rwlk->transactionlock);
++}
++void rwlock_acquire_write(struct rwlock *rwlk)
++{
++	lock_acquire(rwlk->transactionlock);
++	lock_acquire(rwlk->writelock);
++
++	while(rwlk->counter != 0)
++		cv_wait(rwlk->cv_writer, rwlk->transactionlock);
++
++	lock_release(rwlk->transactionlock);
++}
++void rwlock_release_write(struct rwlock *rwlk)
++{
++	lock_acquire(rwlk->transactionlock);
++	lock_release(rwlk->writelock);
++
++	lock_release(rwlk->transactionlock);
+ }

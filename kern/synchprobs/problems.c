@@ -47,6 +47,8 @@
 // functions will allow you to do local initialization. They are called at
 // the top of the corresponding driver code.
 
+static void getquadrants(unsigned long, int *);
+
 struct cv *cvWaitingMales;
 struct cv *cvWaitingFemales;
 struct semaphore *semMale;

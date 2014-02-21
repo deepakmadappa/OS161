@@ -66,7 +66,6 @@ void whalemating_cleanup(void);
 void inQuadrant(int);
 void leaveIntersection(void);
 int stoplight(int, char **);
-void getquadrants(unsigned long direction, int* ret);
 void gostraight(void *, unsigned long);
 void turnleft(void *, unsigned long);
 void turnright(void *, unsigned long);
