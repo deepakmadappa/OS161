@@ -86,15 +86,15 @@ int whalemating(int nargs, char **args) {
 
 			switch (i) {
 			case 0:
-				snprintf(name, sizeof(name), "Male Whale Thread %d", (i * 3) + j);
+				snprintf(name, sizeof(name), "Male Whale Thread %d", (i * 10) + j);
 				err = thread_fork(name, male, whalematingMenuSemaphore, j, NULL);
 				break;
 			case 1:
-				snprintf(name, sizeof(name), "Female Whale Thread %d", (i * 3) + j);
+				snprintf(name, sizeof(name), "Female Whale Thread %d", (i * 10) + j);
 				err = thread_fork(name, female, whalematingMenuSemaphore, j, NULL);
 				break;
 			case 2:
-				snprintf(name, sizeof(name), "Matchmaker Whale Thread %d", (i * 3) + j);
+				snprintf(name, sizeof(name), "Matchmaker Whale Thread %d", (i * 10) + j);
 				err = thread_fork(name, matchmaker, whalematingMenuSemaphore, j, NULL);
 				break;
 			}

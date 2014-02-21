@@ -47,63 +47,96 @@
 // functions will allow you to do local initialization. They are called at
 // the top of the corresponding driver code.
 
+struct cv *cvWaitingMales;
+struct cv *cvWaitingFemales;
+struct semaphore *semMale;
+struct semaphore *semFemale;
+struct lock *lkMale;
+struct lock *lkFemale;
+
+
 void whalemating_init() {
-  return;
+	cvWaitingMales = cv_create("waitingmales");
+	cvWaitingFemales = cv_create("waitingfemales");
+	semMale = sem_create("semMale",0);
+	semFemale = sem_create("semFemale",0);
+	lkMale = lock_create("lkMale");
+	lkFemale = lock_create("lkFemale");
+	return;
 }
 
 // 20 Feb 2012 : GWA : Adding at the suggestion of Nikhil Londhe. We don't
 // care if your problems leak memory, but if you do, use this to clean up.
 
 void whalemating_cleanup() {
-  return;
+	sem_destroy(semMale);
+	sem_destroy(semFemale);
+	cv_destroy(cvWaitingMales);
+	cv_destroy(cvWaitingFemales);
+	lock_destroy(lkMale);
+	lock_destroy(lkFemale);
+	return;
 }
 
 void
 male(void *p, unsigned long which)
 {
 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
-  (void)which;
-  
-  male_start();
-	// Implement this function 
-  male_end();
+	(void)which;
 
-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
-  // whalemating driver can return to the menu cleanly.
-  V(whalematingMenuSemaphore);
-  return;
+	male_start();
+	V(semMale);
+	lock_acquire(lkMale);
+	cv_wait(cvWaitingMales, lkMale);
+	lock_release(lkMale);
+	male_end();
+
+	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+	// whalemating driver can return to the menu cleanly.
+	V(whalematingMenuSemaphore);
+	return;
 }
 
 void
 female(void *p, unsigned long which)
 {
 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
-  (void)which;
-  
-  female_start();
-	// Implement this function 
-  female_end();
-  
-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
-  // whalemating driver can return to the menu cleanly.
-  V(whalematingMenuSemaphore);
-  return;
+	(void)which;
+
+	female_start();
+	V(semFemale);
+	lock_acquire(lkFemale);
+	cv_wait(cvWaitingFemales, lkFemale);
+	lock_release(lkFemale);
+
+	female_end();
+
+	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+	// whalemating driver can return to the menu cleanly.
+	V(whalematingMenuSemaphore);
+	return;
 }
 
 void
 matchmaker(void *p, unsigned long which)
 {
 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
-  (void)which;
-  
-  matchmaker_start();
-	// Implement this function 
-  matchmaker_end();
-  
-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
-  // whalemating driver can return to the menu cleanly.
-  V(whalematingMenuSemaphore);
-  return;
+	(void)which;
+
+	matchmaker_start();
+	P(semMale);
+	P(semFemale);
+	lock_acquire(lkMale);
+	lock_acquire(lkFemale);
+	cv_signal(cvWaitingMales,lkMale);
+
+	cv_signal(cvWaitingFemales,lkFemale);
+	matchmaker_end();
+
+	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+	// whalemating driver can return to the menu cleanly.
+	V(whalematingMenuSemaphore);
+	return;
 }
 
 /*
@@ -137,49 +170,106 @@ matchmaker(void *p, unsigned long which)
 // functions will allow you to do local initialization. They are called at
 // the top of the corresponding driver code.
 
+struct lock *lkPlanning;
+struct lock *lkQuadrant[4];
+
 void stoplight_init() {
-  return;
+	lkQuadrant[0] = lock_create("lkZero");
+	lkQuadrant[1] = lock_create("lkOne");
+	lkQuadrant[2] = lock_create("lkTwo");
+	lkQuadrant[3] = lock_create("lkThree");
+	lkPlanning = lock_create("lkPlanning");
+	return;
 }
 
 // 20 Feb 2012 : GWA : Adding at the suggestion of Nikhil Londhe. We don't
 // care if your problems leak memory, but if you do, use this to clean up.
 
 void stoplight_cleanup() {
-  return;
+	lock_destroy(lkQuadrant[0]);
+	lock_destroy(lkQuadrant[1]);
+	lock_destroy(lkQuadrant[2]);
+	lock_destroy(lkQuadrant[3]);
+	lock_destroy(lkPlanning);
+	return;
+}
+
+void getquadrants(unsigned long direction, int* ret)
+{
+	ret[0] = direction;
+	ret[1] = (direction + 3) % 4;
+	ret[2] = (direction  + 2) % 4;
+
 }
 
 void
 gostraight(void *p, unsigned long direction)
 {
 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
-  (void)direction;
-  
-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
-  // stoplight driver can return to the menu cleanly.
-  V(stoplightMenuSemaphore);
-  return;
+
+	int quad[3];
+	getquadrants(direction, quad);
+
+	lock_acquire(lkPlanning);
+
+	lock_acquire(lkQuadrant[quad[0]]);
+	lock_acquire(lkQuadrant[quad[1]]);
+
+	lock_release(lkPlanning);
+	inQuadrant(quad[0]);
+	inQuadrant(quad[1]);
+	lock_release(lkQuadrant[quad[0]]);
+	leaveIntersection();
+	lock_release(lkQuadrant[quad[1]]);
+	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+	// stoplight driver can return to the menu cleanly.
+	V(stoplightMenuSemaphore);
+	return;
 }
 
 void
 turnleft(void *p, unsigned long direction)
 {
 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
-  (void)direction;
-  
-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
-  // stoplight driver can return to the menu cleanly.
-  V(stoplightMenuSemaphore);
-  return;
+	int quad[3];
+	getquadrants(direction, quad);
+
+	lock_acquire(lkPlanning);
+
+	lock_acquire(lkQuadrant[quad[0]]);
+	lock_acquire(lkQuadrant[quad[1]]);
+	lock_acquire(lkQuadrant[quad[2]]);
+
+	lock_release(lkPlanning);
+	inQuadrant(quad[0]);
+	inQuadrant(quad[1]);
+	lock_release(lkQuadrant[quad[0]]);
+	inQuadrant(quad[2]);
+	lock_release(lkQuadrant[quad[1]]);
+	leaveIntersection();
+	lock_release(lkQuadrant[quad[2]]);
+
+	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+	// stoplight driver can return to the menu cleanly.
+	V(stoplightMenuSemaphore);
+	return;
 }
 
 void
 turnright(void *p, unsigned long direction)
 {
 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
-  (void)direction;
 
-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
-  // stoplight driver can return to the menu cleanly.
-  V(stoplightMenuSemaphore);
-  return;
+	lock_acquire(lkPlanning);
+
+	lock_acquire(lkQuadrant[direction]);
+	inQuadrant(direction);
+	leaveIntersection();
+	lock_release(lkQuadrant[direction]);
+
+	lock_release(lkPlanning);
+	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+	// stoplight driver can return to the menu cleanly.
+	V(stoplightMenuSemaphore);
+	return;
 }

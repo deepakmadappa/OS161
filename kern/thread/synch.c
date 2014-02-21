@@ -221,7 +221,7 @@ void
 lock_release(struct lock *lock)
 {
     KASSERT(lock != NULL);
-
+//    KASSERT(lock_do_i_hold(lock));
 	spinlock_acquire(&lock->lk_lock);
 
 		lock->lk_held = false;
@@ -293,18 +293,18 @@ cv_wait(struct cv *cv, struct lock *lock)
         // Write this
         KASSERT(cv != NULL);
         KASSERT(curthread->t_in_interrupt == false);
-        lock_acquire(lock);
-       	wchan_lock(cv->cv_wchan);
-       	lock_release(lock);
+        lock_release(lock);
+        wchan_lock(cv->cv_wchan);
         wchan_sleep(cv->cv_wchan);
-
+       	lock_acquire(lock);
 }
 
 void
 cv_signal(struct cv *cv, struct lock *lock)
 {
+	(void)lock;
 	KASSERT(cv != NULL);
-	lock_acquire(lock);
+	//lock_acquire(lock);
 	wchan_wakeone(cv->cv_wchan);
 	lock_release(lock);
 }
@@ -312,10 +312,90 @@ cv_signal(struct cv *cv, struct lock *lock)
 void
 cv_broadcast(struct cv *cv, struct lock *lock)
 {
+	(void)lock;
 	// Write this
 	KASSERT(cv != NULL);
-	lock_acquire(lock);
+	//lock_acquire(lock);
 	wchan_wakeall(cv->cv_wchan);
 	lock_release(lock);
 
+}
+
+struct rwlock * rwlock_create(const char *name)
+{
+    struct rwlock *rwlk;
+
+
+    rwlk = kmalloc(sizeof(struct rwlock));
+    if (rwlk == NULL) {
+            return NULL;
+    }
+
+    rwlk->rwlock_name = kstrdup(name);
+    if (rwlk->rwlock_name == NULL) {
+            kfree(rwlk);
+            return NULL;
+    }
+
+    rwlk->writelock = lock_create(name);
+	if (rwlk->writelock == NULL) {
+		kfree(rwlk->rwlock_name);
+		kfree(rwlk);
+
+		return NULL;
+	}
+
+	rwlk->transactionlock = lock_create(name);
+		if (rwlk->transactionlock == NULL) {
+			kfree(rwlk->rwlock_name);
+			kfree(rwlk->writelock);
+			kfree(rwlk);
+			return NULL;
+		}
+    return rwlk;
+}
+void rwlock_destroy(struct rwlock *rwlk)
+{
+	kfree(rwlk->rwlock_name);
+	kfree(rwlk->writelock);
+	kfree(rwlk->transactionlock);
+	kfree(rwlk);
+}
+
+void rwlock_acquire_read(struct rwlock *rwlk)
+{
+	lock_acquire(rwlk->transactionlock);
+	lock_acquire(rwlk->writelock);
+	lock_release(rwlk->writelock);
+
+	rwlk->counter++;
+
+	lock_release(rwlk->transactionlock);
+}
+void rwlock_release_read(struct rwlock *rwlk)
+{
+	lock_acquire(rwlk->transactionlock);
+	rwlk->counter--;
+
+	if(rwlk->counter==0)
+		cv_signal(rwlk->cv_writer, rwlk->transactionlock);
+	else
+		lock_release(rwlk->transactionlock);
+}
+void rwlock_acquire_write(struct rwlock *rwlk)
+{
+	lock_acquire(rwlk->transactionlock);
+	lock_acquire(rwlk->writelock);
+
+	while(rwlk->counter != 0)
+		cv_wait(rwlk->cv_writer, rwlk->transactionlock);
+
+	lock_release(rwlk->transactionlock);
+}
+void rwlock_release_write(struct rwlock *rwlk)
+{
+	lock_acquire(rwlk->transactionlock);
+	lock_release(rwlk->writelock);
+
+	lock_release(rwlk->transactionlock);
 }
