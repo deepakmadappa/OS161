@@ -369,7 +369,7 @@ void rwlock_destroy(struct rwlock *rwlk)
 	kfree(rwlk->rwlock_name);
 	kfree(rwlk->writelock);
 	kfree(rwlk->transactionlock);
-	kfree(rwlk->cv_writer);
+	kfree(rwlk->cv_writer)
 	kfree(rwlk);
 }
 
@@ -390,8 +390,7 @@ void rwlock_release_read(struct rwlock *rwlk)
 
 	if(rwlk->counter==0)
 		cv_signal(rwlk->cv_writer, rwlk->transactionlock);
-	else
-		lock_release(rwlk->transactionlock);
+	lock_release(rwlk->transactionlock);
 }
 void rwlock_acquire_write(struct rwlock *rwlk)
 {
