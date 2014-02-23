@@ -376,9 +376,9 @@ void rwlock_destroy(struct rwlock *rwlk)
 void rwlock_acquire_read(struct rwlock *rwlk)
 {
 	lock_acquire(rwlk->writelock);
+	lock_acquire(rwlk->transactionlock);
 	lock_release(rwlk->writelock);
 
-	lock_acquire(rwlk->transactionlock);
 
 	rwlk->counter++;
 
