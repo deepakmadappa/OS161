@@ -38,6 +38,8 @@
 
 #include <spinlock.h>
 #include <threadlist.h>
+#include <limits.h>
+#include <synch.h>
 
 struct addrspace;
 struct cpu;
@@ -100,7 +102,7 @@ struct thread {
 	bool t_in_interrupt;		/* Are we in an interrupt? */
 	int t_curspl;			/* Current spl*() state */
 	int t_iplhigh_count;		/* # of times IPL has been raised */
-
+	int tid;
 	/*
 	 * Public fields
 	 */
@@ -112,7 +114,23 @@ struct thread {
 	struct vnode *t_cwd;		/* current working directory */
 
 	/* add more here as needed */
+	//TODO :need to set this to NULL somewhere
+	struct filehandle* filetable[__OPEN_MAX];	// remember that 0, 1 and 2 are taken
 };
+
+//Move this out of here later
+struct filehandle
+{
+	int open_mode;
+	off_t offset;
+	struct vnode *fileobject;
+	struct lock lk_fileaccess;
+	int refcount;
+	char* filepath;
+};
+int createfd(struct thread* thread);
+
+
 
 /* Call once during system startup to allocate data structures. */
 void thread_bootstrap(void);

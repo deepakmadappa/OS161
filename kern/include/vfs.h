@@ -114,6 +114,10 @@ int vfs_rename(char *oldpath, char *newpath);
 int vfs_chdir(char *path);
 int vfs_getcwd(struct uio *buf);
 
+
+int vfs_read(struct vnode *vn, struct uio *uio);
+int vfs_write(struct vnode *vn, struct uio *uio);
+off_t vfs_lseek(struct vnode *vn, off_t pos);
 /*
  * Misc
  *

@@ -1,7 +1,26 @@
 #include <types.h>
 #include <syscall.h>
 #include <lib.h>
+#include <vfs.h>
+#include <kern/errno.h>
+#include <thread.h>
+#include <kern/seek.h>
+#include <current.h>
+#include <lib.h>
+#include <kern/iovec.h>
+#include <uio.h>
+#include <kern/stat.h>
+#include <vnode.h>
 
+
+int createfd(struct thread* thread)
+{
+	int i;
+	for(i=3; i < (__OPEN_MAX) ; i++)
+		if (thread->filetable[i] == NULL )
+			return i;
+	return -1;	//file table full
+}
 /*
 Description
 open opens the file, device, or other kernel object named by the pathname filename. The flags argument specifies how to open the file. The optional mode argument is only meaningful in Unix (or if you choose to implement Unix-style security later on) and can be ignored.
@@ -43,12 +62,36 @@ The following error codes should be returned under the conditions given. Other e
     EINVAL		flags contained invalid values.
     EIO		A hard I/O error occurred.
     EFAULT		filename was an invalid pointer.
-   	  */
+ */
 int sys_open(userptr_t filename, int flags, int32_t *fd, ...)
 {
 	kprintf("FileName:%s, Flags:%d", (char*)filename, flags);
-	panic("fail open failed");
-	(void)fd;
+	struct vnode *file_vnode;
+	int err;
+	err = vfs_open((char*)filename, flags, 0, &file_vnode);
+	if(err)
+		return err;
+	//No error we got a vnode now create a filediscriptor for it.
+	//TBD: we may not need to create a file discriptor
+	struct thread* cthread = (struct thread*)curthread;
+	*fd = createfd(cthread);
+	if(*fd < 0)
+		return ENFILE;
+
+	//only create this if its not already there.
+	struct filehandle *fh = kmalloc(sizeof(struct filehandle));
+	if(fh==NULL)
+		panic("Memory allocation for file handle failed");
+	fh->fileobject = file_vnode;
+	fh->offset = 0;
+	fh->open_mode = flags;
+	fh->filepath = kstrdup( (char*) filename);
+	//fh->lk_fileaccess; ??
+	//fh->refcount; ??
+
+	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
+	cthread->filetable[*fd] = fh;
+	//panic("fail open failed");
 	return 0;
 }
 
@@ -72,10 +115,25 @@ The following error codes should be returned under the conditions given. Other e
     EBADF		fd is not a valid file descriptor, or was not opened for reading.
     EFAULT		Part or all of the address space pointed to by buf is invalid.
     EIO		A hardware I/O error occurred reading the data.
-    */
+ */
 int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 {
-	(void)fd, (void)buf, (void)buflen, (void)bytesread;
+	struct filehandle* fh;
+	struct thread *cur = (struct thread*)curthread;
+	fh = cur->filetable[fd];
+	if(fh == NULL || (fh->open_mode & 1)!=0 )
+		return EBADF;
+
+	struct iovec iov;
+	struct uio ku;
+
+	uio_kinit(&iov, &ku, &buf, buflen, fh->offset, UIO_READ);
+
+	int err = vfs_read(fh->fileobject, &ku);
+	if(err)
+		return err;
+	*bytesread = ku.uio_iov->iov_len;
+
 	return 0;
 }
 
@@ -100,11 +158,24 @@ The following error codes should be returned under the conditions given. Other e
     EFAULT		Part or all of the address space pointed to by buf is invalid.
     ENOSPC		There is no free space remaining on the filesystem containing the file.
     EIO		A hardware I/O error occurred writing the data.
-    */
+ */
 int sys_write(int fd, userptr_t buf, size_t nbytes, int32_t *byteswritten)
 {
-	(void)fd, (void)buf, (void)nbytes, (void)byteswritten;
-		return 0;
+	struct filehandle* fh;
+	struct thread *cur = (struct thread*)curthread;
+	fh = cur->filetable[fd];
+	if(fh == NULL || (fh->open_mode & 3)==0 )
+		return EBADF;
+
+	struct iovec iov;
+	struct uio ku;
+
+	uio_kinit(&iov, &ku, &buf, nbytes, fh->offset, UIO_WRITE);
+	int err = vfs_write(fh->fileobject, &ku);
+	if(err)
+		return err;
+	*byteswritten = ku.uio_offset - fh->offset;
+	return 0;
 }
 
 /*
@@ -136,11 +207,44 @@ The following error codes should be returned under the conditions given. Other e
     ESPIPE		fd refers to an object which does not support seeking.
     EINVAL		whence is invalid.
     EINVAL		The resulting seek position would be negative.
-    */
+ */
 int lseek(int fd, off_t pos, int whence, int32_t *offsethigh, int32_t *offsetlow)
 {
-	(void)fd, (void)pos, (void)whence, (void)offsethigh, (void)offsetlow;
-			return 0;
+	if(fd<3)
+		return ESPIPE;
+	if(whence <0 || whence >2)
+		return EINVAL;
+	struct filehandle* fh;
+	struct thread *cur = (struct thread*)curthread;
+	fh = cur->filetable[fd];
+	if(fh == NULL )
+		return EBADF;
+
+	off_t newpos;
+	if(whence == SEEK_SET)
+		newpos = 0;
+	else if(whence == SEEK_END)
+	{
+		struct stat filestat;
+		VOP_STAT(fh->fileobject, &filestat);
+		newpos = filestat.st_size;
+	}
+	else
+	{
+		newpos = fh->offset;
+	}
+	int err =vfs_lseek(fh->fileobject, newpos + pos);
+	if(err)
+		return err;
+	fh->offset = newpos + pos;
+	// else whence is SEEK_CUR
+
+	off_t ofst = fh->offset;
+	*offsetlow = (int32_t)ofst;
+	ofst = ofst >> 32;
+	*offsethigh = (int32_t)ofst;
+
+	return 0;
 }
 
 /*
@@ -157,11 +261,20 @@ The following error codes should be returned under the conditions given. Other e
 
     EBADF		fd is not a valid file handle.
     EIO		A hard I/O error occurred.
-    */
+ */
 int close(int fd)
 {
-	(void)fd;
-		return 0;
+	struct filehandle* fh;
+	struct thread *cur = (struct thread*)curthread;
+	fh = cur->filetable[fd];
+	if(fh == NULL)
+		return EBADF;
+	vfs_close(fh->fileobject);
+	kfree(fh->filepath);
+	kfree(fh);
+	cur->filetable[fd] = NULL;
+	while(1);
+	return 0;
 }
 
 /*
@@ -189,7 +302,7 @@ The following error codes should be returned under the conditions given. Other e
 int dup2(int oldfd, int newfd)
 {
 	(void)oldfd, (void)newfd;
-		return 0;
+	return 0;
 }
 
 /*
@@ -212,7 +325,7 @@ The following error codes should be returned under the conditions given. Other e
 int chdir(userptr_t pathname)
 {
 	(void)pathname;
-			return 0;
+	return 0;
 }
 
 
@@ -232,9 +345,9 @@ The following error codes should be returned under the conditions given. Other e
     ENOENT		A component of the pathname no longer exists.
     EIO		A hard I/O error occurred.
     EFAULT		buf points to an invalid address.
-*/
+ */
 int __getcwd(userptr_t buf, size_t buflen, int32_t *ret)
 {
 	(void)buf, (void)buflen, (void)ret;
-		return 0;
+	return 0;
 }

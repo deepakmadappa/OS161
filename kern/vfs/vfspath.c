@@ -249,6 +249,34 @@ vfs_symlink(const char *contents, char *path)
 	return result;
 }
 
+int vfs_read(struct vnode *vn, struct uio *uio)
+{
+		int result;
+		result = VOP_READ(vn, uio);
+
+		VOP_DECREF(vn);
+
+		return result;
+}
+
+int vfs_write(struct vnode *vn, struct uio *uio)
+{
+		int result;
+		result = VOP_WRITE(vn, uio);
+
+		//VOP_DECREF(vn);
+
+		return result;
+}
+
+off_t vfs_lseek(struct vnode *vn, off_t pos)
+{
+	int result;
+	result = VOP_TRYSEEK(vn, pos);
+
+	return result;
+}
+
 /*
  * Does most of the work for readlink().
  *
