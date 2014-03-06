@@ -11,7 +11,7 @@
 #include <uio.h>
 #include <kern/stat.h>
 #include <vnode.h>
-
+#include <copyinout.h>
 
 int createfd(struct thread* thread)
 {
@@ -65,7 +65,7 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_open(userptr_t filename, int flags, int32_t *fd, ...)
 {
-	kprintf("FileName:%s, Flags:%d", (char*)filename, flags);
+//	kprintf("FileName:%s, Flags:%d", (char*)filename, flags);
 	struct vnode *file_vnode;
 	int err;
 	err = vfs_open((char*)filename, flags, 0, &file_vnode);
@@ -85,7 +85,6 @@ int sys_open(userptr_t filename, int flags, int32_t *fd, ...)
 	fh->fileobject = file_vnode;
 	fh->offset = 0;
 	fh->open_mode = flags;
-	fh->filepath = kstrdup( (char*) filename);
 	//fh->lk_fileaccess; ??
 	//fh->refcount; ??
 
@@ -127,12 +126,13 @@ int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 	struct iovec iov;
 	struct uio ku;
 
-	uio_kinit(&iov, &ku, &buf, buflen, fh->offset, UIO_READ);
+	uio_uinit(&iov, &ku, &buf, buflen, fh->offset, UIO_READ);
 
 	int err = vfs_read(fh->fileobject, &ku);
 	if(err)
 		return err;
 	*bytesread = ku.uio_iov->iov_len;
+	fh->offset += *bytesread;
 
 	return 0;
 }
@@ -166,15 +166,21 @@ int sys_write(int fd, userptr_t buf, size_t nbytes, int32_t *byteswritten)
 	fh = cur->filetable[fd];
 	if(fh == NULL || (fh->open_mode & 3)==0 )
 		return EBADF;
-
+	char *writebuf = (char* )kmalloc(nbytes+1);
+	int result = copyin(buf, writebuf, nbytes);
+	if(result)
+		return result;
 	struct iovec iov;
 	struct uio ku;
 
-	uio_kinit(&iov, &ku, &buf, nbytes, fh->offset, UIO_WRITE);
+	uio_kinit(&iov, &ku, writebuf, nbytes, fh->offset, UIO_WRITE);
+	//ku.uio_space = cur->t_addrspace;
 	int err = vfs_write(fh->fileobject, &ku);
 	if(err)
 		return err;
 	*byteswritten = ku.uio_offset - fh->offset;
+	fh->offset += *byteswritten;
+	kfree(writebuf);
 	return 0;
 }
 
@@ -208,7 +214,7 @@ The following error codes should be returned under the conditions given. Other e
     EINVAL		whence is invalid.
     EINVAL		The resulting seek position would be negative.
  */
-int lseek(int fd, off_t pos, int whence, int32_t *offsethigh, int32_t *offsetlow)
+int sys_lseek(int fd, off_t pos, int whence, int32_t *offsethigh, int32_t *offsetlow)
 {
 	if(fd<3)
 		return ESPIPE;
@@ -262,7 +268,7 @@ The following error codes should be returned under the conditions given. Other e
     EBADF		fd is not a valid file handle.
     EIO		A hard I/O error occurred.
  */
-int close(int fd)
+int sys_close(int fd)
 {
 	struct filehandle* fh;
 	struct thread *cur = (struct thread*)curthread;
@@ -270,7 +276,6 @@ int close(int fd)
 	if(fh == NULL)
 		return EBADF;
 	vfs_close(fh->fileobject);
-	kfree(fh->filepath);
 	kfree(fh);
 	cur->filetable[fd] = NULL;
 	while(1);
@@ -299,7 +304,7 @@ The following error codes should be returned under the conditions given. Other e
     EBADF		oldfd is not a valid file handle, or newfd is a value that cannot be a valid file handle.
     EMFILE		The process's file table was full, or a process-specific limit on open files was reached.
  */
-int dup2(int oldfd, int newfd)
+int sys_dup2(int oldfd, int newfd)
 {
 	(void)oldfd, (void)newfd;
 	return 0;
@@ -322,7 +327,7 @@ The following error codes should be returned under the conditions given. Other e
     EIO		A hard I/O error occurred.
     EFAULT		pathname was an invalid pointer.
  */
-int chdir(userptr_t pathname)
+int sys_chdir(userptr_t pathname)
 {
 	(void)pathname;
 	return 0;
@@ -346,7 +351,7 @@ The following error codes should be returned under the conditions given. Other e
     EIO		A hard I/O error occurred.
     EFAULT		buf points to an invalid address.
  */
-int __getcwd(userptr_t buf, size_t buflen, int32_t *ret)
+int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret)
 {
 	(void)buf, (void)buflen, (void)ret;
 	return 0;

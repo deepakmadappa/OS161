@@ -131,7 +131,7 @@ syscall(struct trapframe *tf)
 	    	pos = pos & tf->tf_a3;
 	    	//TBD;
 
-	    	err = lseek(tf->tf_a0, pos, tf->tf_sp, &offsethigh, &offsetlow);
+	    	err = sys_lseek(tf->tf_a0, pos, tf->tf_sp, &offsethigh, &offsetlow);
 
 	    	if(err==0)
 	    	{
@@ -142,20 +142,20 @@ syscall(struct trapframe *tf)
 	    break;
 
 	    case SYS_close:
-	    	err = close(tf->tf_a0);
+	    	err = sys_close(tf->tf_a0);
 	    break;
 
 	    case SYS_dup2:
 	    	//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
-	    	err = dup2(tf->tf_a0, tf->tf_a1);
+	    	err = sys_dup2(tf->tf_a0, tf->tf_a1);
 	    break;
 
 	    case SYS_chdir:
-	    	err = chdir((userptr_t) tf->tf_a0);
+	    	err = sys_chdir((userptr_t) tf->tf_a0);
 	    break;
 
 	    case SYS___getcwd:
-	    	err = __getcwd((userptr_t )tf->tf_a0, tf->tf_a1, &retval);
+	    	err = sys___getcwd((userptr_t )tf->tf_a0, tf->tf_a1, &retval);
 	    break;
 
 	    /*****************************************END FILE SYSTEM CALLS**************************************/

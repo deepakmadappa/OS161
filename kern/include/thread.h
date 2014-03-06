@@ -126,7 +126,6 @@ struct filehandle
 	struct vnode *fileobject;
 	struct lock lk_fileaccess;
 	int refcount;
-	char* filepath;
 };
 int createfd(struct thread* thread);
 

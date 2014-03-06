@@ -95,10 +95,62 @@ runprogram(char *progname)
 		return result;
 	}
 
+	//Initializing STD IN
+	struct vnode *std;
+	char con[5] = "con:";
+	int err = vfs_open(con, O_RDONLY, 0x660, &std);
+	if(err)
+		KASSERT("Initializing STDIN failed");
+	struct filehandle *fh = kmalloc(sizeof(struct filehandle));
+	if(fh==NULL)
+		KASSERT("Memory allocation for file handle failed");
+	fh->fileobject = std;
+	fh->offset = 0;
+	fh->open_mode = O_RDONLY;
+	//fh->lk_fileaccess; ??
+	//fh->refcount; ??
+
+	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
+	curthread->filetable[0] = fh;
+
+	//Initializing STDOUT
+	err = vfs_open(con, O_WRONLY, 0x660, &std);
+	if(err)
+		KASSERT("Initializing STDOUT failed");
+	fh = kmalloc(sizeof(struct filehandle));
+	if(fh==NULL)
+		KASSERT("Memory allocation for file handle failed");
+	fh->fileobject = std;
+	fh->offset = 0;
+	fh->open_mode = O_WRONLY;
+	//fh->lk_fileaccess; ??
+	//fh->refcount; ??
+
+	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
+	curthread->filetable[1] = fh;
+
+	//Initializing STDERR
+	err = vfs_open(con, O_WRONLY, 0660, &std);
+	if(err)
+		KASSERT("Initializing STDERR failed");
+	fh = kmalloc(sizeof(struct filehandle));
+	if(fh==NULL)
+		panic("Memory allocation for file handle failed");
+	fh->fileobject = std;
+	fh->offset = 0;
+	fh->open_mode = O_WRONLY;
+	//fh->lk_fileaccess; ??
+	//fh->refcount; ??
+
+	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
+	curthread->filetable[2] = fh;
+
+
+
 	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
-	
+			stackptr, entrypoint);
+
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
 	return EINVAL;
