@@ -128,7 +128,7 @@ syscall(struct trapframe *tf)
 	    	//TBD
 	    	pos = tf->tf_a2;	//assuming here that a2 contains the MS 32 bits. NEED TO VERIFY
 	    	pos = pos << 32;
-	    	pos = pos & tf->tf_a3;
+	    	pos = pos | tf->tf_a3;
 	    	//TBD;
 
 	    	err = sys_lseek(tf->tf_a0, pos, tf->tf_sp, &offsethigh, &offsetlow);

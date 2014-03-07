@@ -66,8 +66,14 @@ The following error codes should be returned under the conditions given. Other e
 int sys_open(userptr_t filename, int flags, int32_t *fd, ...)
 {
 //	kprintf("FileName:%s, Flags:%d", (char*)filename, flags);
+	char kfilename[__PATH_MAX + __NAME_MAX + 1];
+
+
 	struct vnode *file_vnode;
-	int err;
+	int err, len;
+	err = copyinstr(filename, kfilename, __PATH_MAX + __NAME_MAX + 1, &len);
+	if(err)
+		return err;
 	err = vfs_open((char*)filename, flags, 0, &file_vnode);
 	if(err)
 		return err;
@@ -125,14 +131,20 @@ int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 
 	struct iovec iov;
 	struct uio ku;
-
-	uio_uinit(&iov, &ku, &buf, buflen, fh->offset, UIO_READ);
+	char *readbuf = (char*)kmalloc(buflen);
+	uio_kinit(&iov, &ku, readbuf, buflen, fh->offset, UIO_READ);
 
 	int err = vfs_read(fh->fileobject, &ku);
 	if(err)
 		return err;
-	*bytesread = ku.uio_iov->iov_len;
+	*bytesread = buflen - ku.uio_resid;
 	fh->offset += *bytesread;
+
+	err = copyout(readbuf, buf, *bytesread);
+	if(err)
+		return err;
+
+	kfree(readbuf);
 
 	return 0;
 }
@@ -214,10 +226,13 @@ The following error codes should be returned under the conditions given. Other e
     EINVAL		whence is invalid.
     EINVAL		The resulting seek position would be negative.
  */
-int sys_lseek(int fd, off_t pos, int whence, int32_t *offsethigh, int32_t *offsetlow)
+int sys_lseek(int fd, off_t pos, int sp, int32_t *offsethigh, int32_t *offsetlow)
 {
 	if(fd<3)
 		return ESPIPE;
+	int whence;
+	int err = copyin((userptr_t)sp+16, &whence, sizeof(int32_t));
+
 	if(whence <0 || whence >2)
 		return EINVAL;
 	struct filehandle* fh;
@@ -239,7 +254,7 @@ int sys_lseek(int fd, off_t pos, int whence, int32_t *offsethigh, int32_t *offse
 	{
 		newpos = fh->offset;
 	}
-	int err =vfs_lseek(fh->fileobject, newpos + pos);
+	err =vfs_lseek(fh->fileobject, newpos + pos);
 	if(err)
 		return err;
 	fh->offset = newpos + pos;
@@ -278,7 +293,7 @@ int sys_close(int fd)
 	vfs_close(fh->fileobject);
 	kfree(fh);
 	cur->filetable[fd] = NULL;
-	while(1);
+//	while(1);
 	return 0;
 }
 

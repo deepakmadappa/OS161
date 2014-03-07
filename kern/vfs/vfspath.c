@@ -254,7 +254,7 @@ int vfs_read(struct vnode *vn, struct uio *uio)
 		int result;
 		result = VOP_READ(vn, uio);
 
-		VOP_DECREF(vn);
+//		VOP_DECREF(vn);
 
 		return result;
 }
