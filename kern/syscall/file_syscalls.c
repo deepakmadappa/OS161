@@ -70,7 +70,8 @@ int sys_open(userptr_t filename, int flags, int32_t *fd, ...)
 
 
 	struct vnode *file_vnode;
-	int err, len;
+	int err;
+	size_t len;
 	err = copyinstr(filename, kfilename, __PATH_MAX + __NAME_MAX + 1, &len);
 	if(err)
 		return err;
