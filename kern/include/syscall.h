@@ -69,9 +69,9 @@ int sys_chdir(userptr_t pathname);
 int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret);
 
 //ASST2 Process syscalls
-pid_t getpid(void);
-pid_t fork(void);
-int execv(const char *program, char **args);
-pid_t waitpid(pid_t pid, int *status, int options);
-void _exit(int exitcode);
+pid_t sys_getpid(struct trapframe *ptf);
+pid_t sys_fork(void);
+int sys_execv(const char *program, char **args);
+pid_t sys_waitpid(pid_t pid, int *status, int options);
+void sys__exit(int exitcode);
 #endif /* _SYSCALL_H_ */

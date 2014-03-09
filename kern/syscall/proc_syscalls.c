@@ -12,7 +12,50 @@
 #include <test.h>
 
 
+struct trapframe* clone(struct trapframe *inframe)
+{
+	struct trapframe* returnframe = kmalloc(sizeof(struct trapframe));
 
+	returnframe->tf_vaddr = inframe->tf_vaddr;	/* coprocessor 0 vaddr register */
+	returnframe->tf_status = inframe->tf_status;	/* coprocessor 0 status register */
+	returnframe->tf_cause = inframe->tf_cause;	/* coprocessor 0 cause register */
+	returnframe->tf_lo = inframe->tf_lo;
+	returnframe->tf_hi = inframe->tf_hi;
+	returnframe->tf_ra = inframe->tf_ra;		/* Saved register 31 */
+	returnframe->tf_at = inframe->tf_at;		/* Saved register 1 (AT) */
+	returnframe->tf_v0 = inframe->tf_v0;		/* Saved register 2 (v0) */
+	returnframe->tf_v1 = inframe->tf_v1;		/* etc. */
+	returnframe->tf_a0 = inframe->tf_a0;
+	returnframe->tf_a1 = inframe->tf_a1;
+	returnframe->tf_a2 = inframe->tf_a2;
+	returnframe->tf_a3 = inframe->tf_a3;
+	returnframe->tf_t0 = inframe->tf_t0;
+	returnframe->tf_t1 = inframe->tf_t1;
+	returnframe->tf_t2 = inframe->tf_t2;
+	returnframe->tf_t3 = inframe->tf_t3;
+	returnframe->tf_t4 = inframe->tf_t4;
+	returnframe->tf_t5 = inframe->tf_t5;
+	returnframe->tf_t6 = inframe->tf_t6;
+	returnframe->tf_t7 = inframe->tf_t7;
+	returnframe->tf_s0 = inframe->tf_s0;
+	returnframe->tf_s1 = inframe->tf_s1;
+	returnframe->tf_s2 = inframe->tf_s2;
+	returnframe->tf_s3 = inframe->tf_s3;
+	returnframe->tf_s4 = inframe->tf_s4;
+	returnframe->tf_s5 = inframe->tf_s5;
+	returnframe->tf_s6 = inframe->tf_s6;
+	returnframe->tf_s7 = inframe->tf_s7;
+	returnframe->tf_t8 = inframe->tf_t8;
+	returnframe->tf_t9 = inframe->tf_t9;
+	returnframe->tf_k0 = inframe->tf_k0;		/* dummy (see exception.S comments) */
+	returnframe->tf_k1 = inframe->tf_k1;		/* dummy */
+	returnframe->tf_gp = inframe->tf_gp;
+	returnframe->tf_sp = inframe->tf_sp;
+	returnframe->tf_s8 = inframe->tf_s8;
+	returnframe->tf_epc = inframe->tf_epc;
+
+	return returnframe;
+}
 
 /*
  *
@@ -31,10 +74,9 @@ Errors
 getpid does not fail.
  */
 
-pid_t getpid(void)
+pid_t sys_getpid(void)
 {
-
-	return 0;
+	return curthread->pid;
 }
 
 
@@ -71,7 +113,7 @@ The following error codes should be returned under the conditions given. Other e
     ENOMEM		Sufficient virtual memory for the new process was not available.
  */
 
-pid_t fork(void)
+pid_t sys_fork(struct trapframe *ptf)
 {
 	return 0;
 }
@@ -113,7 +155,7 @@ The following error codes should be returned under the conditions given. Other e
     EFAULT		One of the args is an invalid pointer.
  */
 
-int execv(const char *program, char **args)
+int sys_execv(const char *program, char **args)
 {
 	(void)program, (void)args;
 	return 0;
@@ -171,7 +213,7 @@ The following error codes should be returned under the conditions given. Other e
     ESRCH		The pid argument named a nonexistent process.
     EFAULT		The status argument was an invalid pointer.
  */
-pid_t waitpid(pid_t pid, int *status, int options)
+pid_t sys_waitpid(pid_t pid, int *status, int options)
 {
 	(void)pid,(void)status,(void)options;
 
@@ -194,7 +236,7 @@ Return Values
 _exit does not return.
  */
 
-void _exit(int exitcode)
+void sys__exit(int exitcode)
 {
 	(void)exitcode;
 
