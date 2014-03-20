@@ -103,6 +103,7 @@ struct thread {
 	int t_curspl;			/* Current spl*() state */
 	int t_iplhigh_count;		/* # of times IPL has been raised */
 	pid_t pid;
+	pid_t ppid;
 	/*
 	 * Public fields
 	 */
@@ -115,7 +116,7 @@ struct thread {
 
 	/* add more here as needed */
 	//TODO :need to set this to NULL somewhere
-	struct filehandle* filetable[__OPEN_MAX];	// remember that 0, 1 and 2 are taken
+	struct filehandle* filetable[OPEN_MAX];	// remember that 0, 1 and 2 are taken
 };
 
 //Move this out of here later
@@ -129,6 +130,10 @@ struct filehandle
 };
 int createfd(struct thread* thread);
 
+struct thread* g_pidlist[PID_MAX];
+
+struct lock g_lk_pid;
+int createpid(struct thread* newthread, int *ret);
 
 
 /* Call once during system startup to allocate data structures. */

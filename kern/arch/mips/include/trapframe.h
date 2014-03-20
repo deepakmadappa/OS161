@@ -77,7 +77,7 @@ struct trapframe {
 	uint32_t tf_epc;	/* coprocessor 0 epc register */
 };
 
-struct trapframe* clone(struct trapframe *);
+void clonetrapframe(struct trapframe *, struct trapframe*);
 
 /*
  * MIPS exception codes.

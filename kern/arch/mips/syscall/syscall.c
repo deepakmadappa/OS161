@@ -160,10 +160,19 @@ syscall(struct trapframe *tf)
 
 	    /*****************************************END FILE SYSTEM CALLS**************************************/
 
+	    /**************************************** START OF PROCESS SYSTEM CALLS ***************************/
+	    case SYS_getpid:
+	    	retval = sys_getpid();
+	    break;
+
+	    case SYS_fork:
+	    	err = sys_fork(tf, &retval);
+	    break;
 
 
 
 
+	    /*****************************************END OF PROCESS SYSTEM CALLS******************/
 
 	    /* Add stuff here */
  

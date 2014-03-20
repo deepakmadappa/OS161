@@ -1,5 +1,5 @@
-#include <syscall.h>
 #include <types.h>
+#include <syscall.h>
 #include <kern/errno.h>
 #include <kern/fcntl.h>
 #include <lib.h>
@@ -10,11 +10,12 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <mips/trapframe.h>
 
 
-struct trapframe* clone(struct trapframe *inframe)
+void clonetrapframe(struct trapframe *inframe, struct trapframe *returnframe)
 {
-	struct trapframe* returnframe = kmalloc(sizeof(struct trapframe));
+	//struct trapframe* returnframe = kmalloc(sizeof(struct trapframe));
 
 	returnframe->tf_vaddr = inframe->tf_vaddr;	/* coprocessor 0 vaddr register */
 	returnframe->tf_status = inframe->tf_status;	/* coprocessor 0 status register */
@@ -54,7 +55,7 @@ struct trapframe* clone(struct trapframe *inframe)
 	returnframe->tf_s8 = inframe->tf_s8;
 	returnframe->tf_epc = inframe->tf_epc;
 
-	return returnframe;
+	//return returnframe;
 }
 
 /*
@@ -113,8 +114,24 @@ The following error codes should be returned under the conditions given. Other e
     ENOMEM		Sufficient virtual memory for the new process was not available.
  */
 
-pid_t sys_fork(struct trapframe *ptf)
+int sys_fork(struct trapframe *ptf, pid_t *pid)
 {
+	//clone the parent trapframe
+
+	//TODO: Currently leaking this part of memory need to fix this
+	struct trapframe *tf = kmalloc(sizeof(struct trapframe*));
+	clonetrapframe(ptf, tf);
+
+	struct addrspace *childas = NULL;
+	int err = as_copy(curthread->t_addrspace, &childas);	//copy parent address space
+	if(err)
+		return err;
+	struct thread* child=NULL;
+	err = thread_fork("child", &child_fork, (void*)tf, (unsigned long int) childas, &child );
+	if(err)
+		return err;
+
+	*pid = child->pid;
 	return 0;
 }
 
@@ -242,3 +259,23 @@ void sys__exit(int exitcode)
 
 
 }
+
+
+void child_fork(void* parenttf, unsigned long childas)
+{
+	struct trapframe* ptf = (struct trapframe*)parenttf;
+	struct addrspace* as;
+	as = (struct addrspace*)childas;
+	struct trapframe tf;
+	clonetrapframe(ptf, &tf);
+
+	tf.tf_a3 = 0;
+	tf.tf_v0 = 0;
+	tf.tf_epc += 4;
+
+	curthread->t_addrspace = as;
+	as_activate(curthread->t_addrspace);
+	mips_usermode(&tf);
+}
+
+
