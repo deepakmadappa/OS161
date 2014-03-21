@@ -150,12 +150,12 @@ runprogram(char *progname)
 	for(i=3; i < OPEN_MAX;i++)
 		curthread->filetable[i] = NULL;
 
-	lock_acquire(&g_lk_pid);
+//	lock_acquire(&g_lk_pid);
 	for(i=3; i<PID_MAX; i++)
 	{
 		g_pidlist[i]= NULL;
 	}
-	lock_release(&g_lk_pid);
+//	lock_release(&g_lk_pid);
 
 	//let us assume this is the init process/thread set the pid to 1
 	curthread->pid = PID_MIN;

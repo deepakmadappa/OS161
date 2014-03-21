@@ -529,6 +529,10 @@ thread_fork(const char *name,
 	for(i=0; i<OPEN_MAX; i++)
 	{
 		newthread->filetable[i] = curthread->filetable[i];
+		if(newthread->filetable[i]!=NULL && i>2)
+		{
+			newthread->filetable[i]->refcount++;
+		}
 	}
 
 	//assign pid and ppid
@@ -1245,18 +1249,4 @@ interprocessor_interrupt(void)
 	spinlock_release(&curcpu->c_ipi_lock);
 }
 
-int createpid(struct thread* newthread, int *ret)
-{
-	int i;
-	lock_acquire(&g_lk_pid);
-	for(i=3; i<PID_MAX; i++)
-		if(g_pidlist[i] == NULL)
-		{
-			g_pidlist[i]= newthread;
-			*ret = i;
-			lock_release(&g_lk_pid);
-			return 0;
-		}
-	lock_release(&g_lk_pid);
-	return ENPROC;
-}
+
