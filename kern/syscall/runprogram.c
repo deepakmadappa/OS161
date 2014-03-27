@@ -95,6 +95,8 @@ runprogram(char *progname)
 		return result;
 	}
 
+
+
 	//Initializing STD IN
 	struct vnode *std;
 	char con[5] = "con:";
@@ -107,8 +109,8 @@ runprogram(char *progname)
 	fh->fileobject = std;
 	fh->offset = 0;
 	fh->open_mode = O_RDONLY;
-	//fh->lk_fileaccess; ??
-	//fh->refcount; ??
+	fh->lk_fileaccess = lock_create("filelock");
+	fh->refcount = 0;
 
 	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
 	curthread->filetable[0] = fh;
@@ -123,8 +125,9 @@ runprogram(char *progname)
 	fh->fileobject = std;
 	fh->offset = 0;
 	fh->open_mode = O_WRONLY;
-	//fh->lk_fileaccess; ??
-	//fh->refcount; ??
+	fh->lk_fileaccess = lock_create("filelock");
+	fh->refcount = 0;
+
 
 	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
 	curthread->filetable[1] = fh;
@@ -139,8 +142,9 @@ runprogram(char *progname)
 	fh->fileobject = std;
 	fh->offset = 0;
 	fh->open_mode = O_WRONLY;
-	//fh->lk_fileaccess; ??
-	//fh->refcount; ??
+	fh->lk_fileaccess = lock_create("filelock");
+	fh->refcount = 0;
+
 
 	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
 	curthread->filetable[2] = fh;
