@@ -330,8 +330,30 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_dup2(int oldfd, int newfd)
 {
-	(void)oldfd, (void)newfd;
-	return 0;
+	//oldfd should be valid,newfd should be valid
+	//newfd location must be empty
+	//File table full or limit reached
+	if(oldfd<0 ||oldfd>__OPEN_MAX){
+		return EBADF;
+	}
+	struct filehandle* fh;
+	struct thread *cur = (struct thread*)curthread;
+	fh = cur->filetable[oldfd];
+	if(fh == NULL)
+		return EBADF;
+
+	if(newfd<0||newfd>__OPEN_MAX){
+		return EBADF;
+	}else{
+		fh = cur->filetable[newfd];
+		if(fh != NULL){
+			//Close this file
+			vfs_close(fh->fileobject);
+			kfree(fh);
+		}
+		cur->filetable[newfd] = cur->filetable[oldfd];
+	}
+	return newfd;
 }
 
 /*
@@ -353,7 +375,17 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_chdir(userptr_t pathname)
 {
-	(void)pathname;
+	char kfilename[__PATH_MAX + __NAME_MAX + 1];
+	int err;
+	size_t len;
+	err = copyinstr(pathname, kfilename, __PATH_MAX + __NAME_MAX + 1, &len);
+	if(err)
+		return err;
+	//didn use kfilename?
+	err = vfs_chdir((char*)kfilename);
+	if(err)
+		return err;
+
 	return 0;
 }
 
@@ -372,11 +404,25 @@ The following error codes should be returned under the conditions given. Other e
 
 
     ENOENT		A component of the pathname no longer exists.
-    EIO		A hard I/O error occurred.
+    EIO			A hard I/O error occurred.
     EFAULT		buf points to an invalid address.
  */
 int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret)
 {
-	(void)buf, (void)buflen, (void)ret;
-	return 0;
+	//	struct thread *cur = (struct thread*)curthread;
+		struct iovec iov;
+		struct uio ku;
+		char *readbuf = (char*)kmalloc(buflen);
+		uio_kinit(&iov, &ku, readbuf, buflen, 0, UIO_READ);
+		int err = vfs_getcwd(&ku);
+		if(err)
+			return err;
+		*ret = buflen - ku.uio_resid;
+			err = copyout(readbuf, buf, *ret);
+		if(err)
+			return err;
+
+		kfree(readbuf);
+
+	return *ret;
 }
