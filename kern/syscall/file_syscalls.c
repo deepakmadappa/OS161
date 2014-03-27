@@ -65,7 +65,7 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_open(userptr_t filename, int flags, int32_t *fd, ...)
 {
-//	kprintf("FileName:%s, Flags:%d", (char*)filename, flags);
+	//	kprintf("FileName:%s, Flags:%d", (char*)filename, flags);
 	char kfilename[__PATH_MAX + __NAME_MAX + 1];
 
 
@@ -124,6 +124,8 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 {
+	if(fd<0||fd>=OPEN_MAX)
+		return EBADF;
 	struct filehandle* fh;
 	struct thread *cur = (struct thread*)curthread;
 	fh = cur->filetable[fd];
@@ -176,6 +178,8 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_write(int fd, userptr_t buf, size_t nbytes, int32_t *byteswritten)
 {
+	if(fd<0||fd>=OPEN_MAX)
+		return EBADF;
 	struct filehandle* fh;
 	struct thread *cur = (struct thread*)curthread;
 	fh = cur->filetable[fd];
@@ -232,6 +236,8 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_lseek(int fd, off_t pos, int sp, int32_t *offsethigh, int32_t *offsetlow)
 {
+	if(fd<0||fd>=OPEN_MAX)
+		return EBADF;
 	if(fd<3)
 		return ESPIPE;
 	int whence;
@@ -290,6 +296,8 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys_close(int fd)
 {
+	if(fd<0||fd>=OPEN_MAX)
+		return EBADF;
 	struct filehandle* fh;
 	struct thread *cur = (struct thread*)curthread;
 	fh = cur->filetable[fd];
@@ -302,7 +310,7 @@ int sys_close(int fd)
 		kfree(fh);
 	}
 	cur->filetable[fd] = NULL;
-//	while(1);
+	//	while(1);
 	return 0;
 }
 
@@ -328,21 +336,21 @@ The following error codes should be returned under the conditions given. Other e
     EBADF		oldfd is not a valid file handle, or newfd is a value that cannot be a valid file handle.
     EMFILE		The process's file table was full, or a process-specific limit on open files was reached.
  */
-int sys_dup2(int oldfd, int newfd)
+int sys_dup2(int oldfd, int newfd, int * retval)
 {
 	//oldfd should be valid,newfd should be valid
 	//newfd location must be empty
 	//File table full or limit reached
-	if(oldfd<0 ||oldfd>__OPEN_MAX){
+	if(oldfd<0 ||oldfd >=__OPEN_MAX){
 		return EBADF;
 	}
 	struct filehandle* fh;
 	struct thread *cur = (struct thread*)curthread;
 	fh = cur->filetable[oldfd];
-	if(fh == NULL)
+	if(fh == NULL){
 		return EBADF;
-
-	if(newfd<0||newfd>__OPEN_MAX){
+	}
+	if(newfd<0||newfd>=__OPEN_MAX){
 		return EBADF;
 	}else{
 		fh = cur->filetable[newfd];
@@ -352,8 +360,10 @@ int sys_dup2(int oldfd, int newfd)
 			kfree(fh);
 		}
 		cur->filetable[newfd] = cur->filetable[oldfd];
+		*retval=newfd;
+		return 0;
 	}
-	return newfd;
+
 }
 
 /*
@@ -410,19 +420,19 @@ The following error codes should be returned under the conditions given. Other e
 int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret)
 {
 	//	struct thread *cur = (struct thread*)curthread;
-		struct iovec iov;
-		struct uio ku;
-		char *readbuf = (char*)kmalloc(buflen);
-		uio_kinit(&iov, &ku, readbuf, buflen, 0, UIO_READ);
-		int err = vfs_getcwd(&ku);
-		if(err)
-			return err;
-		*ret = buflen - ku.uio_resid;
-			err = copyout(readbuf, buf, *ret);
-		if(err)
-			return err;
+	struct iovec iov;
+	struct uio ku;
+	char *readbuf = (char*)kmalloc(buflen);
+	uio_kinit(&iov, &ku, readbuf, buflen, 0, UIO_READ);
+	int err = vfs_getcwd(&ku);
+	if(err)
+		return err;
+	*ret = buflen - ku.uio_resid;
+	err = copyout(readbuf, buf, *ret);
+	if(err)
+		return err;
 
-		kfree(readbuf);
+	kfree(readbuf);
 
 	return *ret;
 }

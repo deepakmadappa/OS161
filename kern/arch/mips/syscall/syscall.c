@@ -147,7 +147,8 @@ syscall(struct trapframe *tf)
 
 	    case SYS_dup2:
 	    	//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
-	    	err = sys_dup2(tf->tf_a0, tf->tf_a1);
+	    	err = sys_dup2(tf->tf_a0, tf->tf_a1,&retval);
+
 	    break;
 
 	    case SYS_chdir:
