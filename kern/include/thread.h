@@ -104,6 +104,10 @@ struct thread {
 	int t_iplhigh_count;		/* # of times IPL has been raised */
 	pid_t pid;
 	pid_t ppid;
+	//Anand: Added for waitpid implementation
+	int exitCode;
+	struct semaphore* exitSemaphore;
+
 	/*
 	 * Public fields
 	 */
@@ -125,7 +129,7 @@ struct filehandle
 	int open_mode;
 	off_t offset;
 	struct vnode *fileobject;
-	struct lock lk_fileaccess;
+	struct lock* lk_fileaccess;
 	int refcount;
 };
 int createfd(struct thread* thread);

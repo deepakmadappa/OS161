@@ -133,7 +133,7 @@ int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 	struct iovec iov;
 	struct uio ku;
 	char *readbuf = (char*)kmalloc(buflen);
-	lock_acquire(&fh->lk_fileaccess);
+	lock_acquire(fh->lk_fileaccess);
 	uio_kinit(&iov, &ku, readbuf, buflen, fh->offset, UIO_READ);
 
 	int err = vfs_read(fh->fileobject, &ku);
@@ -142,7 +142,7 @@ int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 	*bytesread = buflen - ku.uio_resid;
 	fh->offset += *bytesread;
 
-	lock_release(&fh->lk_fileaccess);
+	lock_release(fh->lk_fileaccess);
 	err = copyout(readbuf, buf, *bytesread);
 	if(err)
 		return err;
@@ -187,7 +187,7 @@ int sys_write(int fd, userptr_t buf, size_t nbytes, int32_t *byteswritten)
 		return result;
 	struct iovec iov;
 	struct uio ku;
-	lock_acquire(&fh->lk_fileaccess);
+	lock_acquire(fh->lk_fileaccess);
 	uio_kinit(&iov, &ku, writebuf, nbytes, fh->offset, UIO_WRITE);
 	//ku.uio_space = cur->t_addrspace;
 	int err = vfs_write(fh->fileobject, &ku);
@@ -195,7 +195,7 @@ int sys_write(int fd, userptr_t buf, size_t nbytes, int32_t *byteswritten)
 		return err;
 	*byteswritten = ku.uio_offset - fh->offset;
 	fh->offset += *byteswritten;
-	lock_release(&fh->lk_fileaccess);
+	lock_release(fh->lk_fileaccess);
 	kfree(writebuf);
 	return 0;
 }
@@ -244,7 +244,7 @@ int sys_lseek(int fd, off_t pos, int sp, int32_t *offsethigh, int32_t *offsetlow
 	fh = cur->filetable[fd];
 	if(fh == NULL )
 		return EBADF;
-	lock_acquire(&fh->lk_fileaccess);
+	lock_acquire(fh->lk_fileaccess);
 	off_t newpos;
 	if(whence == SEEK_SET)
 		newpos = 0;
@@ -269,7 +269,7 @@ int sys_lseek(int fd, off_t pos, int sp, int32_t *offsethigh, int32_t *offsetlow
 	ofst = ofst >> 32;
 	*offsethigh = (int32_t)ofst;
 
-	lock_release(&fh->lk_fileaccess);
+	lock_release(fh->lk_fileaccess);
 	return 0;
 }
 

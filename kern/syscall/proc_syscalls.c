@@ -233,8 +233,38 @@ The following error codes should be returned under the conditions given. Other e
 pid_t sys_waitpid(pid_t pid, int *status, int options)
 {
 	(void)pid,(void)status,(void)options;
+	if(options!=0)
+		return EINVAL;
+	//status :write code
 
-	return 0;
+	struct thread* waitOnThread=g_pidlist[pid];
+	//if waitOnThread==NULL or exitSemaphore[i]==NULL(Thread exited or does not exist)
+	//then exitCode[i]==-1 thread does not exist or exit code collected
+	//else thread existed, exited and its exit code yet to be collected
+	//oderwise thread currently active. Do a P() on exitSemaphone[i].
+	//on V(), check exitCode[i], if it is nt -1 then return it and set it to -1
+	//else error
+
+	//As described under _exit(), precisely what is meant by "interested" is up to you...Decide on this
+	//TO allow only parents to wait on child, check if current threads Pid is PPID of the child thread. But this wont work with already exited thread.
+	//Status yet to understand
+
+	//Do i need to cast pID to int??
+	if(waitOnThread==NULL){
+		//The pid argument named a nonexistent process.
+		return ESRCH;
+	}else if(status==NULL){
+		return EFAULT;
+	}else {
+		//Child Thread is still executing or is a Zombie Now(waitOnThread->t_state==S_ZOMBIE)). Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
+		//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
+		if(curthread->pid!=waitOnThread->ppid)
+			return ECHILD;
+		P(waitOnThread->exitSemaphore);
+		*status=waitOnThread->exitCode;
+		waitOnThread->exitCode=-999;
+		return pid;
+	}
 }
 
 /*
@@ -253,10 +283,12 @@ Return Values
 _exit does not return.
  */
 
-void sys__exit(int exitcode)
+void sys__exit(int exitstatuscode)
 {
-	(void)exitcode;
-
+	int pid=curthread->pid;
+	g_pidlist[pid]->exitCode=exitstatuscode;
+	thread_exit();
+	V(g_pidlist[pid]->exitSemaphore);
 
 }
 

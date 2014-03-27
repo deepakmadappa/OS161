@@ -154,6 +154,10 @@ thread_create(const char *name)
 
 	/* If you add to struct thread, be sure to initialize here */
 
+	//Anand: Setting exitCode to -999(Default) and initializing semaphore
+	thread->exitCode=-999;
+	thread->exitSemaphore=sem_create("exitSemaphore",1);
+
 	return thread;
 }
 
@@ -281,7 +285,9 @@ exorcise(void)
 	while ((z = threadlist_remhead(&curcpu->c_zombies)) != NULL) {
 		KASSERT(z != curthread);
 		KASSERT(z->t_state == S_ZOMBIE);
-		thread_destroy(z);
+		//Anand: Check if z's exitCode has been collected, only then allow it to be destroyed
+		if(z->exitCode==-999)
+			thread_destroy(z);
 	}
 }
 
@@ -542,7 +548,6 @@ thread_fork(const char *name,
 		return err;
 	newthread->pid = newpid;
 	newthread->ppid = curthread->pid;
-
 	/* Lock the current cpu's run queue and make the new thread runnable */
 	thread_make_runnable(newthread, false);
 
@@ -836,6 +841,9 @@ thread_exit(void)
 
 	/* Check the stack guard band. */
 	thread_checkstack(cur);
+
+	//Anand: destroying exitSempahore
+	sem_destroy(cur->exitSemaphore);
 
 	/* Interrupts off on this processor */
 	splhigh();
