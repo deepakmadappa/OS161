@@ -314,15 +314,15 @@ void child_fork(void* parenttf, unsigned long childas)
 int createpid(struct thread* newthread, int *ret)
 {
 	int i;
-	//lock_acquire(&g_lk_pid);
+	lock_acquire(g_lk_pid);
 	for(i=3; i<PID_MAX; i++)
 		if(g_pidlist[i] == NULL)
 		{
 			g_pidlist[i]= newthread;
 			*ret = i;
-			//lock_release(&g_lk_pid);
+			lock_release(g_lk_pid);
 			return 0;
 		}
-	//lock_release(&g_lk_pid);
+	lock_release(g_lk_pid);
 	return ENPROC;
 }
