@@ -126,7 +126,7 @@ boot(void)
 
 	/* Default bootfs - but ignore failure, in case emu0 doesn't exist */
 	vfs_setbootfs("emu0");
-
+	g_lk_pid=lock_create("createPIDLock");
 
 	/*
 	 * Make sure various things aren't screwed up.

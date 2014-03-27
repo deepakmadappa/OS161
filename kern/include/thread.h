@@ -136,7 +136,7 @@ int createfd(struct thread* thread);
 
 struct thread* g_pidlist[PID_MAX];
 
-struct lock g_lk_pid;
+struct lock* g_lk_pid;
 int createpid(struct thread* newthread, int *ret);
 
 
