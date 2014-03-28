@@ -35,6 +35,7 @@
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
+#include <copyinout.h>
 
 
 /*
@@ -100,84 +101,91 @@ syscall(struct trapframe *tf)
 	retval = 0;
 	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 	off_t pos;
+	int status=0;
 
 	switch (callno) {
-	    case SYS_reboot:
+	case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
 		break;
 
-	    case SYS___time:
+	case SYS___time:
 		err = sys___time((userptr_t)tf->tf_a0,
-				 (userptr_t)tf->tf_a1);
+				(userptr_t)tf->tf_a1);
 		break;
 
 		/******************************FILE SYSTEM CALLS**************************************/
-	    case SYS_open:
-	    	err = sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval);
-	    break;
+	case SYS_open:
+		err = sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval);
+		break;
 
-	    case SYS_read:
-	    	err = sys_read(tf->tf_a0, (userptr_t) tf->tf_a1 , tf->tf_a2, &retval/*bytesread*/ );
-	    break;
+	case SYS_read:
+		err = sys_read(tf->tf_a0, (userptr_t) tf->tf_a1 , tf->tf_a2, &retval/*bytesread*/ );
+		break;
 
-	    case SYS_write:
-	    	err = sys_write(tf->tf_a0, (userptr_t) tf->tf_a1 , tf->tf_a2, &retval/* byteswritten*/);
-	    break;
+	case SYS_write:
+		err = sys_write(tf->tf_a0, (userptr_t) tf->tf_a1 , tf->tf_a2, &retval/* byteswritten*/);
+		break;
 
-	    case SYS_lseek:
-	    	//TBD
-	    	pos = tf->tf_a2;	//assuming here that a2 contains the MS 32 bits. NEED TO VERIFY
-	    	pos = pos << 32;
-	    	pos = pos | tf->tf_a3;
-	    	//TBD;
+	case SYS_lseek:
+		//TBD
+		pos = tf->tf_a2;	//assuming here that a2 contains the MS 32 bits. NEED TO VERIFY
+		pos = pos << 32;
+		pos = pos | tf->tf_a3;
+		//TBD;
 
-	    	err = sys_lseek(tf->tf_a0, pos, tf->tf_sp, &offsethigh, &offsetlow);
+		err = sys_lseek(tf->tf_a0, pos, tf->tf_sp, &offsethigh, &offsetlow);
 
-	    	if(err==0)
-	    	{
-	    		retval = offsethigh;
-	    		tf->tf_v1 = offsetlow;
-	    	}
+		if(err==0)
+		{
+			retval = offsethigh;
+			tf->tf_v1 = offsetlow;
+		}
 
-	    break;
+		break;
 
-	    case SYS_close:
-	    	err = sys_close(tf->tf_a0);
-	    break;
+	case SYS_close:
+		err = sys_close(tf->tf_a0);
+		break;
 
-	    case SYS_dup2:
-	    	//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
-	    	err = sys_dup2(tf->tf_a0, tf->tf_a1,&retval);
+	case SYS_dup2:
+		//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
+		err = sys_dup2(tf->tf_a0, tf->tf_a1,&retval);
 
-	    break;
+		break;
 
-	    case SYS_chdir:
-	    	err = sys_chdir((userptr_t) tf->tf_a0);
-	    break;
+	case SYS_chdir:
+		err = sys_chdir((userptr_t) tf->tf_a0);
+		break;
 
-	    case SYS___getcwd:
-	    	err = sys___getcwd((userptr_t )tf->tf_a0, tf->tf_a1, &retval);
-	    break;
+	case SYS___getcwd:
+		err = sys___getcwd((userptr_t )tf->tf_a0, tf->tf_a1, &retval);
+		break;
 
-	    /*****************************************END FILE SYSTEM CALLS**************************************/
+		/*****************************************END FILE SYSTEM CALLS**************************************/
 
-	    /**************************************** START OF PROCESS SYSTEM CALLS ***************************/
-	    case SYS_getpid:
-	    	retval = sys_getpid();
-	    break;
+		/**************************************** START OF PROCESS SYSTEM CALLS ***************************/
+	case SYS_getpid:
+		retval = sys_getpid();
+		break;
 
-	    case SYS_fork:
-	    	err = sys_fork(tf, &retval);
-	    break;
+	case SYS_fork:
+		err = sys_fork(tf, &retval);
+		break;
+	case SYS_waitpid:
+		err = sys_waitpid(tf->tf_a0,&status,tf->tf_a2,&retval);
+		copyout(&status,(userptr_t)tf->tf_a1,sizeof(int));
+		break;
+	case SYS__exit:
+		sys_exit(tf->tf_a0);
+		break;
 
 
 
+		/*****************************************END OF PROCESS SYSTEM CALLS******************/
 
-	    /*****************************************END OF PROCESS SYSTEM CALLS******************/
+		/* Add stuff here */
 
-	    /* Add stuff here */
- 
-	    default:
+	default:
 		kprintf("Unknown syscall %d\n", callno);
 		err = ENOSYS;
 		break;
@@ -198,12 +206,12 @@ syscall(struct trapframe *tf)
 		tf->tf_v0 = retval;
 		tf->tf_a3 = 0;      /* signal no error */
 	}
-	
+
 	/*
 	 * Now, advance the program counter, to avoid restarting
 	 * the syscall over and over again.
 	 */
-	
+
 	tf->tf_epc += 4;
 
 	/* Make sure the syscall code didn't forget to lower spl */

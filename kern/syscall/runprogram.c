@@ -166,7 +166,6 @@ runprogram(char *progname)
 	//let us assume this is the init process/thread set the pid to 1
 	curthread->pid = PID_MIN;
 	curthread->ppid = 0;
-	//Anand: DO we need to change this
 	g_pidlist[PID_MIN] = curthread;
 
 

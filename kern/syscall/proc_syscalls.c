@@ -130,7 +130,6 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 	err = thread_fork("child", &child_fork, (void*)tf, (unsigned long int) childas, &child );
 	if(err)
 		return err;
-
 	*pid = child->pid;
 	return 0;
 }
@@ -230,14 +229,13 @@ The following error codes should be returned under the conditions given. Other e
     ESRCH		The pid argument named a nonexistent process.
     EFAULT		The status argument was an invalid pointer.
  */
-pid_t sys_waitpid(pid_t pid, int *status, int options)
+int sys_waitpid(pid_t pid, int *status, int options, int *retval)
 {
-	(void)pid,(void)status,(void)options;
 	if(options!=0)
 		return EINVAL;
-	//status :write code
 
 	struct thread* waitOnThread=g_pidlist[pid];
+
 	//if waitOnThread==NULL or exitSemaphore[i]==NULL(Thread exited or does not exist)
 	//then exitCode[i]==-1 thread does not exist or exit code collected
 	//else thread existed, exited and its exit code yet to be collected
@@ -250,20 +248,22 @@ pid_t sys_waitpid(pid_t pid, int *status, int options)
 	//Status yet to understand
 
 	//Do i need to cast pID to int??
-	if(waitOnThread==NULL){
+	if(status==NULL){
+		return EFAULT;
+	}else if(waitOnThread==NULL){
 		//The pid argument named a nonexistent process.
 		return ESRCH;
-	}else if(status==NULL){
-		return EFAULT;
+
 	}else {
-		//Child Thread is still executing or is a Zombie Now(waitOnThread->t_state==S_ZOMBIE)). Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
+		//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
 		//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
 		if(curthread->pid!=waitOnThread->ppid)
 			return ECHILD;
 		P(waitOnThread->exitSemaphore);
-		*status=waitOnThread->exitCode;
-		waitOnThread->exitCode=-999;
-		return pid;
+		*status=exitStatusCode[pid];
+		g_pidlist[pid]=NULL;
+		*retval=pid;
+		return 0;
 	}
 }
 
@@ -283,12 +283,12 @@ Return Values
 _exit does not return.
  */
 
-void sys__exit(int exitstatuscode)
+void sys_exit(int exitcode)
 {
 	int pid=curthread->pid;
-	g_pidlist[pid]->exitCode=exitstatuscode;
+	exitStatusCode[pid]=exitcode;
 	thread_exit();
-	V(g_pidlist[pid]->exitSemaphore);
+	V(curthread->exitSemaphore);
 
 }
 

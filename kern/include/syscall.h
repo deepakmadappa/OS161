@@ -72,8 +72,8 @@ int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret);
 pid_t sys_getpid(void);
 int sys_fork(struct trapframe *ptf, pid_t *pid);
 int sys_execv(const char *program, char **args);
-pid_t sys_waitpid(pid_t pid, int *status, int options);
-void sys__exit(int exitcode);
+int sys_waitpid(pid_t pid, int *status, int options,int*);
+void sys_exit(int exitcode);
 
 void child_fork(void* data1, unsigned long data2);
 

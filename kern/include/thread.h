@@ -105,7 +105,6 @@ struct thread {
 	pid_t pid;
 	pid_t ppid;
 	//Anand: Added for waitpid implementation
-	int exitCode;
 	struct semaphore* exitSemaphore;
 
 	/*
@@ -135,6 +134,7 @@ struct filehandle
 int createfd(struct thread* thread);
 
 struct thread* g_pidlist[PID_MAX];
+int exitStatusCode[PID_MAX];
 
 struct lock* g_lk_pid;
 int createpid(struct thread* newthread, int *ret);
