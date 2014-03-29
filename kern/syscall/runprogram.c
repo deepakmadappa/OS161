@@ -166,7 +166,11 @@ runprogram(char *progname)
 	//let us assume this is the init process/thread set the pid to 1
 	curthread->pid = PID_MIN;
 	curthread->ppid = 0;
-	g_pidlist[PID_MIN] = curthread;
+	struct pidentry* pident = kmalloc(sizeof(struct pidentry));
+	pident->exitstatus = 0;
+	pident->thread = curthread;
+	pident->sem = sem_create("threadsem", 0);
+	g_pidlist[PID_MIN] = pident;
 
 
 

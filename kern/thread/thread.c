@@ -155,7 +155,7 @@ thread_create(const char *name)
 	/* If you add to struct thread, be sure to initialize here */
 
 	//Anand: Setting exitCode to -999(Default) and initializing semaphore
-	thread->exitSemaphore=sem_create("exitSemaphore",1);
+	//thread->exitSemaphore=sem_create("exitSemaphore",1);
 
 	return thread;
 }
@@ -265,7 +265,7 @@ thread_destroy(struct thread *thread)
 	/* sheer paranoia */
 	thread->t_wchan_name = "DESTROYED";
 	//Anand: destroying exitSempahore
-	sem_destroy(thread->exitSemaphore);
+	//sem_destroy(thread->exitSemaphore);
 
 
 	kfree(thread->t_name);

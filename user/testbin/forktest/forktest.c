@@ -41,6 +41,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <err.h>
+#include <errno.h>
 
 /*
  * This is used by all processes, to try to help make sure all
@@ -82,8 +83,8 @@ check(void)
 		seenpid = mypid;
 		if (seenpid != getpid()) {
 			errx(1, "pid mismatch (%d, should be %d) "
-			     "- your vm is broken!", 
-			     seenpid, getpid());
+			     "- your vm is broken! errno:%d",
+			     seenpid, getpid(), errno);
 		}
 	}
 }
@@ -144,24 +145,16 @@ test(int nowait)
 	pid0 = dofork();
 	putchar('0');
 	check();
-	//warnx("pid:%d", pid0);
 	pid1 = dofork();
 	putchar('1');
 	check();
-	//warnx("pid:%d", pid1);
 	pid2 = dofork();
 	putchar('2');
 	check();
-	//warnx("pid:%d", pid2);
 	pid3 = dofork();
 	putchar('3');
 	check();
-	//warnx("pid:%d", pid3);
 
-	while(1)
-	{
-
-	}
 	/*
 	 * These must be called in reverse order to avoid waiting
 	 * improperly.

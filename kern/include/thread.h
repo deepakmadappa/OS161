@@ -105,7 +105,7 @@ struct thread {
 	pid_t pid;
 	pid_t ppid;
 	//Anand: Added for waitpid implementation
-	struct semaphore* exitSemaphore;
+	//struct semaphore* exitSemaphore;
 
 	/*
 	 * Public fields
@@ -131,10 +131,18 @@ struct filehandle
 	struct lock* lk_fileaccess;
 	int refcount;
 };
+
+struct pidentry
+{
+	struct thread* thread;
+	struct semaphore *sem;
+	int exitstatus;
+};
+
 int createfd(struct thread* thread);
 
-struct thread* g_pidlist[PID_MAX];
-int exitStatusCode[PID_MAX];
+struct pidentry* g_pidlist[PID_MAX];
+//int exitStatusCode[PID_MAX];
 
 struct lock* g_lk_pid;
 int createpid(struct thread* newthread, pid_t *ret);

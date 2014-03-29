@@ -77,9 +77,6 @@ getpid does not fail.
 
 pid_t sys_getpid(void)
 {
-	if(curthread->pid == -1)
-		panic("help");
-
 	return curthread->pid;
 }
 
@@ -129,8 +126,8 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 	//clone the parent trapframe
 
 	//TODO: Currently leaking this part of memory need to fix this
-	struct trapframe *tf = kmalloc(sizeof(struct trapframe));
-	clonetrapframe(ptf, tf);
+	//struct trapframe *tf = kmalloc(sizeof(struct trapframe));
+	//clonetrapframe(ptf, tf);
 
 	struct addrspace *childas = NULL;
 	int err = as_copy(curthread->t_addrspace, &childas);	//copy parent address space
@@ -140,7 +137,7 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 
 	struct semaphore* s = sem_create("forksem",0);
 	msg->as = childas;
-	msg->tf= tf;
+	msg->tf= ptf;
 	msg->sem = s;
 	struct thread* child=NULL;
 	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
@@ -251,7 +248,6 @@ int sys_waitpid(pid_t pid, int *status, int options, int *retval)
 	if(options!=0)
 		return EINVAL;
 
-	struct thread* waitOnThread=g_pidlist[pid];
 
 	//if waitOnThread==NULL or exitSemaphore[i]==NULL(Thread exited or does not exist)
 	//then exitCode[i]==-1 thread does not exist or exit code collected
@@ -267,17 +263,21 @@ int sys_waitpid(pid_t pid, int *status, int options, int *retval)
 	//Do i need to cast pID to int??
 	if(status==NULL){
 		return EFAULT;
-	}else if(waitOnThread==NULL){
+	}else if(g_pidlist[pid]==NULL){
 		//The pid argument named a nonexistent process.
 		return ESRCH;
 
 	}else {
 		//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
 		//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
-		if(curthread->pid!=waitOnThread->ppid)
+		struct thread* waitOnThread=g_pidlist[pid]->thread;
+
+		if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
 			return ECHILD;
-		P(waitOnThread->exitSemaphore);
-		*status=exitStatusCode[pid];
+		P(g_pidlist[pid]->sem);
+		*status=g_pidlist[pid]->exitstatus;
+		sem_destroy(g_pidlist[pid]->sem);
+		kfree(g_pidlist[pid]);
 		g_pidlist[pid]=NULL;
 		*retval=pid;
 		return 0;
@@ -303,10 +303,10 @@ _exit does not return.
 void sys_exit(int exitcode)
 {
 	int pid=curthread->pid;
-	exitStatusCode[pid]=exitcode;
+	g_pidlist[pid]->exitstatus=exitcode;
+	g_pidlist[pid]->thread = NULL;
+	V(g_pidlist[pid]->sem);
 	thread_exit();
-	V(curthread->exitSemaphore);
-
 }
 
 
@@ -327,8 +327,10 @@ void child_fork(void* data1, unsigned long data2)
 	tf.tf_v0 = 0;
 	tf.tf_epc += 4;
 
+	//kfree(ptf);
+
 	V(msg->sem);
-	kfree(msg->tf);
+	kfree(msg->sem);
 	kfree(msg);
 
 	mips_usermode(&tf);
@@ -342,7 +344,11 @@ int createpid(struct thread* newthread, pid_t *ret)
 	for(i=3; i<PID_MAX; i++)
 		if(g_pidlist[i] == NULL)
 		{
-			g_pidlist[i]= newthread;
+			struct pidentry *pident = kmalloc(sizeof(struct pidentry));
+			pident->exitstatus = 0;
+			pident->thread = newthread;
+			pident->sem = sem_create("threadsem", 0);
+			g_pidlist[i]= pident;
 			*ret = i;
 			lock_release(g_lk_pid);
 			return 0;
