@@ -11,7 +11,7 @@
 #include <syscall.h>
 #include <test.h>
 #include <mips/trapframe.h>
-
+#include <synch.h>
 
 void clonetrapframe(struct trapframe *inframe, struct trapframe *returnframe)
 {
@@ -77,6 +77,9 @@ getpid does not fail.
 
 pid_t sys_getpid(void)
 {
+	if(curthread->pid == -1)
+		panic("help");
+
 	return curthread->pid;
 }
 
@@ -114,20 +117,34 @@ The following error codes should be returned under the conditions given. Other e
     ENOMEM		Sufficient virtual memory for the new process was not available.
  */
 
+struct message
+{
+	struct trapframe *tf;
+	struct addrspace *as;
+	struct semaphore *sem;
+};
+
 int sys_fork(struct trapframe *ptf, pid_t *pid)
 {
 	//clone the parent trapframe
 
 	//TODO: Currently leaking this part of memory need to fix this
-	struct trapframe *tf = kmalloc(sizeof(struct trapframe*));
+	struct trapframe *tf = kmalloc(sizeof(struct trapframe));
 	clonetrapframe(ptf, tf);
 
 	struct addrspace *childas = NULL;
 	int err = as_copy(curthread->t_addrspace, &childas);	//copy parent address space
 	if(err)
 		return err;
+	struct message* msg = kmalloc(sizeof(struct message));
+
+	struct semaphore* s = sem_create("forksem",0);
+	msg->as = childas;
+	msg->tf= tf;
+	msg->sem = s;
 	struct thread* child=NULL;
-	err = thread_fork("child", &child_fork, (void*)tf, (unsigned long int) childas, &child );
+	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
+	P(s);
 	if(err)
 		return err;
 	*pid = child->pid;
@@ -293,11 +310,16 @@ void sys_exit(int exitcode)
 }
 
 
-void child_fork(void* parenttf, unsigned long childas)
+void child_fork(void* data1, unsigned long data2)
 {
-	struct trapframe* ptf = (struct trapframe*)parenttf;
-	struct addrspace* as;
-	as = (struct addrspace*)childas;
+	struct message *msg = (struct message *) data1;
+	struct trapframe* ptf = msg->tf;
+	struct addrspace* as = msg->as;
+	(void)data2;
+	curthread->t_addrspace = as;
+	as_activate(curthread->t_addrspace);
+
+
 	struct trapframe tf;
 	clonetrapframe(ptf, &tf);
 
@@ -305,15 +327,17 @@ void child_fork(void* parenttf, unsigned long childas)
 	tf.tf_v0 = 0;
 	tf.tf_epc += 4;
 
-	curthread->t_addrspace = as;
-	as_activate(curthread->t_addrspace);
+	V(msg->sem);
+	kfree(msg->tf);
+	kfree(msg);
+
 	mips_usermode(&tf);
+
 }
 
-
-int createpid(struct thread* newthread, int *ret)
+int createpid(struct thread* newthread, pid_t *ret)
 {
-	int i;
+	pid_t i;
 	lock_acquire(g_lk_pid);
 	for(i=3; i<PID_MAX; i++)
 		if(g_pidlist[i] == NULL)

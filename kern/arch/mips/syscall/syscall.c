@@ -97,7 +97,7 @@ syscall(struct trapframe *tf)
 	 * deal with it except for calls that return other values, 
 	 * like write.
 	 */
-
+	int32_t pid;
 	retval = 0;
 	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 	off_t pos;
@@ -165,7 +165,8 @@ syscall(struct trapframe *tf)
 
 		/**************************************** START OF PROCESS SYSTEM CALLS ***************************/
 	case SYS_getpid:
-		retval = sys_getpid();
+		pid = sys_getpid();
+		retval = (int32_t)pid;
 		break;
 
 	case SYS_fork:

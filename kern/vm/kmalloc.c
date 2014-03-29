@@ -439,6 +439,8 @@ subpage_kmalloc(size_t sz)
 				pr->freelist_offset = fla - prpage;
 			}
 			else {
+				if(pr->nfree != 0)
+					panic("help");
 				KASSERT(pr->nfree == 0);
 				pr->freelist_offset = INVALID_OFFSET;
 			}

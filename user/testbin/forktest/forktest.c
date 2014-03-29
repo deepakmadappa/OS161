@@ -144,16 +144,24 @@ test(int nowait)
 	pid0 = dofork();
 	putchar('0');
 	check();
+	//warnx("pid:%d", pid0);
 	pid1 = dofork();
 	putchar('1');
 	check();
+	//warnx("pid:%d", pid1);
 	pid2 = dofork();
 	putchar('2');
 	check();
+	//warnx("pid:%d", pid2);
 	pid3 = dofork();
 	putchar('3');
 	check();
+	//warnx("pid:%d", pid3);
 
+	while(1)
+	{
+
+	}
 	/*
 	 * These must be called in reverse order to avoid waiting
 	 * improperly.
