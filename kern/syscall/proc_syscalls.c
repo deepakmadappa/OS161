@@ -142,6 +142,10 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 	struct thread* child=NULL;
 	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 	P(s);
+
+	kfree(msg->sem);
+	kfree(msg);
+
 	if(err)
 		return err;
 	*pid = child->pid;
@@ -272,6 +276,7 @@ int sys_waitpid(pid_t pid, int *status, int options, int *retval)
 		//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
 		struct thread* waitOnThread=g_pidlist[pid]->thread;
 
+		//TODO: need to add PPID to pidentry struct only parent should be able to collect
 		if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
 			return ECHILD;
 		P(g_pidlist[pid]->sem);
@@ -330,8 +335,7 @@ void child_fork(void* data1, unsigned long data2)
 	//kfree(ptf);
 
 	V(msg->sem);
-	kfree(msg->sem);
-	kfree(msg);
+
 
 	mips_usermode(&tf);
 
