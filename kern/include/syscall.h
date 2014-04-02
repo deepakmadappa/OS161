@@ -71,7 +71,7 @@ int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret);
 //ASST2 Process syscalls
 pid_t sys_getpid(void);
 int sys_fork(struct trapframe *ptf, pid_t *pid);
-int sys_execv(const char *program, char **args);
+int sys_execv(userptr_t program, userptr_t args);
 int sys_waitpid(pid_t pid, int *status, int options,int*);
 void sys_exit(int exitcode);
 

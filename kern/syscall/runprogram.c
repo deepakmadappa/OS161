@@ -44,6 +44,19 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <copyinout.h>
+
+int kstrcpy(char* src, char* dest)
+{
+	int i=0;
+	while(src[i] != '\0')
+	{
+		dest[i] = src[i];
+		i++;
+	}
+	dest[i++]= '\0';
+	return i;
+}
 
 /*
  * Load program "progname" and start running it in usermode.
@@ -52,11 +65,52 @@
  * Calls vfs_open on progname and thus may destroy it.
  */
 int
-runprogram(char *progname)
+runprogram(char *progname,char** args, unsigned long nargs)
 {
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
 	int result;
+
+	//Copy the arguments into kernel buffer
+	unsigned long j=0;
+	size_t strlen=0;
+	int size=0;
+	unsigned long argc;
+	//Calculate the size of the array to allocate
+	char * tempArgs=kmalloc(1000);
+
+	while(j< nargs){
+		strlen = kstrcpy(args[j], tempArgs);//copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
+		strlen=strlen + 4 - strlen%4;
+		size+=strlen;
+		j++;
+	}
+	argc=j;
+	//Add space for 4 integers
+	size+=argc*4;
+	size+=4;//for Null
+
+	char * kargv= kmalloc(size);
+	int top=argc*4+4;
+	j=0;
+	while(j< nargs){
+		strlen=0;
+		*((int*)(kargv + j*4))=top;
+		strlen = kstrcpy(args[j], kargv+top);//copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
+		top+=strlen;
+		while(top%4!=0){
+			*(kargv+top)='\0';
+			top++;
+		}
+		j++;
+	}
+	int * ka = (int*)(kargv + j*4);
+	*(ka)=0;
+
+	//kargv is constructed
+
+
+
 
 	/* Open the file. */
 	result = vfs_open(progname, O_RDONLY, 0, &v);
@@ -156,12 +210,12 @@ runprogram(char *progname)
 
 
 
-//	lock_acquire(&g_lk_pid);
+	//	lock_acquire(&g_lk_pid);
 	for(i=3; i<PID_MAX; i++)
 	{
 		g_pidlist[i]= NULL;
 	}
-//	lock_release(&g_lk_pid);
+	//	lock_release(&g_lk_pid);
 
 	//let us assume this is the init process/thread set the pid to 1
 	curthread->pid = PID_MIN;
@@ -174,12 +228,38 @@ runprogram(char *progname)
 
 
 
+
+
+	//Copy the arguments to userstack
+	j=0;
+	int * userAddr=(int *)(stackptr-size);
+
+	while(j<argc){
+		ka = (int*)(kargv + j*4);
+		*ka=*ka+(int)userAddr;
+		//userAddr+=2;
+		j++;
+	}
+	copyout(kargv, (userptr_t)userAddr, (size_t)size);
+	//Copied to user space
+
+	char* copyinstack = kmalloc(size);
+	copyin((userptr_t)userAddr,(void *)copyinstack,(size_t)size);
+
+	int k=0;
+	for(k=0;k<size;k++)
+	{
+		kprintf("%c", copyinstack[i]);
+	}
+	//while(1);
 	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			stackptr, entrypoint);
+	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
+
+	/* Warp to user mode. */
+	//	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+	//			stackptr, entrypoint);
 
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
 	return EINVAL;
 }
-
