@@ -147,7 +147,7 @@ struct pidentry* g_pidlist[PID_MAX];
 struct lock* g_lk_pid;
 int createpid(struct thread* newthread, pid_t *ret);
 
-
+struct semaphore *g_runprogsem;
 /* Call once during system startup to allocate data structures. */
 void thread_bootstrap(void);
 

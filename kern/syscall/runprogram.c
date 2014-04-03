@@ -226,6 +226,7 @@ runprogram(char *progname,char** args, unsigned long nargs)
 	pident->sem = sem_create("threadsem", 0);
 	g_pidlist[PID_MIN] = pident;
 
+	V(g_runprogsem);
 
 
 

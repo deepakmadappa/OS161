@@ -81,6 +81,8 @@ getinterval(time_t s1, uint32_t ns1, time_t s2, uint32_t ns2,
  * It copies the program name because runprogram destroys the copy
  * it gets by passing it to vfs_open(). 
  */
+
+
 static
 void
 cmd_progthread(void *ptr, unsigned long nargs)
@@ -107,6 +109,8 @@ cmd_progthread(void *ptr, unsigned long nargs)
 		return;
 	}
 
+	sys_exit(0);
+
 	/* NOTREACHED: runprogram only returns on error. */
 }
 
@@ -122,6 +126,9 @@ cmd_progthread(void *ptr, unsigned long nargs)
  * array and strings, until you do this a race condition exists
  * between that code and the menu input code.
  */
+
+
+
 static
 int
 common_prog(int nargs, char **args)
@@ -132,15 +139,27 @@ common_prog(int nargs, char **args)
 	kprintf("Warning: this probably won't work with a "
 		"synchronization-problems kernel.\n");
 #endif
+	g_runprogsem = sem_create("run prog sem",0);
 
+	struct thread *child = NULL;
 	result = thread_fork(args[0] /* thread name */,
 			cmd_progthread /* thread function */,
 			args /* thread arg */, nargs /* thread arg */,
-			NULL);
+			&child);
 	if (result) {
 		kprintf("thread_fork failed: %s\n", strerror(result));
 		return result;
 	}
+
+	P(g_runprogsem);
+	int status;
+	int pid;
+	result = sys_waitpid(2, &status,0, &pid );
+	if (result) {
+			kprintf("wait on user thread failed: %s\n", strerror(result));
+			return result;
+	}
+	sem_destroy(g_runprogsem);
 
 	return 0;
 }
