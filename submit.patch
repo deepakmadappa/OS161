@@ -249,7 +249,7 @@ index 240d583..c0c72d2 100644
  void menu(char *argstr);
  
 diff --git a/kern/include/thread.h b/kern/include/thread.h
-index 86706ca..0ed54b0 100644
+index 86706ca..05f5f0f 100644
 --- a/kern/include/thread.h
 +++ b/kern/include/thread.h
 @@ -38,6 +38,8 @@
@@ -305,7 +305,7 @@ index 86706ca..0ed54b0 100644
 +struct lock* g_lk_pid;
 +int createpid(struct thread* newthread, pid_t *ret);
 +
-+
++struct semaphore *g_runprogsem;
  /* Call once during system startup to allocate data structures. */
  void thread_bootstrap(void);
  
@@ -397,10 +397,19 @@ index be4c4b8..1ebfa47 100644
   * Kernel main. Boot up, then fork the menu thread; wait for a reboot
   * request, and then shut down.
 diff --git a/kern/startup/menu.c b/kern/startup/menu.c
-index 6c71551..899257c 100644
+index 6c71551..8864353 100644
 --- a/kern/startup/menu.c
 +++ b/kern/startup/menu.c
-@@ -100,7 +100,7 @@ cmd_progthread(void *ptr, unsigned long nargs)
+@@ -81,6 +81,8 @@ getinterval(time_t s1, uint32_t ns1, time_t s2, uint32_t ns2,
+  * It copies the program name because runprogram destroys the copy
+  * it gets by passing it to vfs_open(). 
+  */
++
++
+ static
+ void
+ cmd_progthread(void *ptr, unsigned long nargs)
+@@ -100,13 +102,15 @@ cmd_progthread(void *ptr, unsigned long nargs)
  
  	strcpy(progname, args[0]);
  
@@ -409,6 +418,54 @@ index 6c71551..899257c 100644
  	if (result) {
  		kprintf("Running program %s failed: %s\n", args[0],
  			strerror(result));
+ 		return;
+ 	}
+ 
++	sys_exit(0);
++
+ 	/* NOTREACHED: runprogram only returns on error. */
+ }
+ 
+@@ -122,6 +126,9 @@ cmd_progthread(void *ptr, unsigned long nargs)
+  * array and strings, until you do this a race condition exists
+  * between that code and the menu input code.
+  */
++
++
++
+ static
+ int
+ common_prog(int nargs, char **args)
+@@ -132,16 +139,28 @@ common_prog(int nargs, char **args)
+ 	kprintf("Warning: this probably won't work with a "
+ 		"synchronization-problems kernel.\n");
+ #endif
++	g_runprogsem = sem_create("run prog sem",0);
+ 
++	struct thread *child = NULL;
+ 	result = thread_fork(args[0] /* thread name */,
+ 			cmd_progthread /* thread function */,
+ 			args /* thread arg */, nargs /* thread arg */,
+-			NULL);
++			&child);
+ 	if (result) {
+ 		kprintf("thread_fork failed: %s\n", strerror(result));
+ 		return result;
+ 	}
+ 
++	P(g_runprogsem);
++	int status;
++	int pid;
++	result = sys_waitpid(2, &status,0, &pid );
++	if (result) {
++			kprintf("wait on user thread failed: %s\n", strerror(result));
++			return result;
++	}
++	sem_destroy(g_runprogsem);
++
+ 	return 0;
+ }
+ 
 diff --git a/kern/synchprobs/drivers.c b/kern/synchprobs/drivers.c
 index 02e336f..a4ba023 100644
 --- a/kern/synchprobs/drivers.c
@@ -1139,10 +1196,10 @@ index 0000000..83b73f5
 +}
 diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 new file mode 100644
-index 0000000..9dbfb09
+index 0000000..c3521be
 --- /dev/null
 +++ b/kern/syscall/proc_syscalls.c
-@@ -0,0 +1,443 @@
+@@ -0,0 +1,447 @@
 +#include <types.h>
 +#include <syscall.h>
 +#include <kern/errno.h>
@@ -1343,40 +1400,42 @@ index 0000000..9dbfb09
 +	int result;
 +
 +	//Copy the arguments into kernel buffer
-+	int i=0;
++	unsigned long j=0;
 +	size_t strlen=0;
 +	int size=0;
-+	int argc;
++	unsigned long argc;
 +	//Calculate the size of the array to allocate
 +	char * tempArgs=kmalloc(1000);
 +
-+	while(args[i]!=NULL){
-+		copyinstr((userptr_t)args[i], tempArgs, 1000,&strlen);
++	while(args[j]!=NULL){
++		//strlen = kstrcpy(args[j], tempArgs);//
++		copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
 +		strlen=strlen + 4 - strlen%4;
 +		size+=strlen;
-+		i++;
++		j++;
 +	}
-+	argc=i+1;
++	argc=j;
 +	//Add space for 4 integers
 +	size+=argc*4;
++	size+=4;//for Null
 +
 +	char * kargv= kmalloc(size);
-+	int top=argc*4;
-+	i=0;
-+	while(args[i]!=NULL){
++	int top=argc*4+4;
++	j=0;
++	while(args[j]!=NULL){
 +		strlen=0;
-+		*((int*)(kargv + i*4))=top;
-+		copyinstr((userptr_t)args[i], kargv+top, 1000,&strlen);
++		*((int*)(kargv + j*4))=top;
++	//	strlen = kstrcpy(args[j], kargv+top);//
++		copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
 +		top+=strlen;
 +		while(top%4!=0){
 +			*(kargv+top)='\0';
 +			top++;
 +		}
-+		i++;
++		j++;
 +	}
-+	int * ka = (int*)(kargv + i*4);
-+	(ka)=NULL;
-+
++	int * ka = (int*)(kargv + j*4);
++	*(ka)=0;
 +	//kargv is constructed
 +
 +	/* Open the file. */
@@ -1404,18 +1463,20 @@ index 0000000..9dbfb09
 +	}
 +
 +	//Copy the arguments to userstack
-+	i=0;
-+	int userAddr=stackptr-size;
-+	while(i<argc){
-+		*(kargv + i*4)=(*(kargv + i*4))+userAddr;
-+		//userAddr+=32;
-+		i++;
++	j=0;
++	int * userAddr=(int *)(stackptr-size);
++
++	while(j<argc){
++		ka = (int*)(kargv + j*4);
++		*ka=*ka+(int)userAddr;
++		//userAddr+=2;
++		j++;
 +	}
 +	copyout(kargv, (userptr_t)userAddr, (size_t)size);
 +	//Copied to user space
-+
++	kfree(tempArgs);
 +	/* Warp to user mode. */
-+	enter_new_process(argc-1, (userptr_t)(stackptr-size),stackptr, entrypoint);
++	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
 +
 +	/* enter_new_process does not return. */
 +	panic("enter_new_process returned\n");
@@ -1587,7 +1648,7 @@ index 0000000..9dbfb09
 +	return ENPROC;
 +}
 diff --git a/kern/syscall/runprogram.c b/kern/syscall/runprogram.c
-index a6f45c8..331ac40 100644
+index a6f45c8..9fd3e7b 100644
 --- a/kern/syscall/runprogram.c
 +++ b/kern/syscall/runprogram.c
 @@ -44,6 +44,19 @@
@@ -1610,7 +1671,7 @@ index a6f45c8..331ac40 100644
  
  /*
   * Load program "progname" and start running it in usermode.
-@@ -52,12 +65,52 @@
+@@ -52,12 +65,53 @@
   * Calls vfs_open on progname and thus may destroy it.
   */
  int
@@ -1622,41 +1683,42 @@ index a6f45c8..331ac40 100644
  	int result;
  
 +	//Copy the arguments into kernel buffer
-+		unsigned long j=0;
-+		size_t strlen=0;
-+		int size=0;
-+		unsigned long argc;
-+		//Calculate the size of the array to allocate
-+		char * tempArgs=kmalloc(1000);
++	unsigned long j=0;
++	size_t strlen=0;
++	int size=0;
++	unsigned long argc;
++	//Calculate the size of the array to allocate
++	char * tempArgs=kmalloc(1000);
 +
-+		while(j< nargs){
-+			strlen = kstrcpy(args[j], tempArgs);//copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
-+			strlen=strlen + 4 - strlen%4;
-+			size+=strlen;
-+			j++;
++	while(j< nargs){
++		strlen = kstrcpy(args[j], tempArgs);//copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
++		strlen=strlen + 4 - strlen%4;
++		size+=strlen;
++		j++;
++	}
++	argc=j;
++	//Add space for 4 integers
++	size+=argc*4;
++	size+=4;//for Null
++
++	char * kargv= kmalloc(size);
++	int top=argc*4+4;
++	j=0;
++	while(j< nargs){
++		strlen=0;
++		*((int*)(kargv + j*4))=top;
++		strlen = kstrcpy(args[j], kargv+top);//copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
++		top+=strlen;
++		while(top%4!=0){
++			*(kargv+top)='\0';
++			top++;
 +		}
-+		argc=j;
-+		//Add space for 4 integers
-+		size+=argc*4;
++		j++;
++	}
++	int * ka = (int*)(kargv + j*4);
++	*(ka)=0;
 +
-+		char * kargv= kmalloc(size);
-+		int top=argc*4;
-+		j=0;
-+		while(j< nargs){
-+			strlen=0;
-+			*((int*)(kargv + j*4))=top;
-+			strlen = kstrcpy(args[j], kargv+top);//copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
-+			top+=strlen;
-+			while(top%4!=0){
-+				*(kargv+top)='\0';
-+				top++;
-+			}
-+			j++;
-+		}
-+		int * ka = (int*)(kargv + j*4);
-+		*(ka)=0;
-+
-+		//kargv is constructed
++	//kargv is constructed
 +
 +
 +
@@ -1664,7 +1726,7 @@ index a6f45c8..331ac40 100644
  	/* Open the file. */
  	result = vfs_open(progname, O_RDONLY, 0, &v);
  	if (result) {
-@@ -95,12 +148,108 @@ runprogram(char *progname)
+@@ -95,12 +149,118 @@ runprogram(char *progname)
  		return result;
  	}
  
@@ -1729,12 +1791,12 @@ index a6f45c8..331ac40 100644
 +
 +
 +
-+//	lock_acquire(&g_lk_pid);
++	//	lock_acquire(&g_lk_pid);
 +	for(i=3; i<PID_MAX; i++)
 +	{
 +		g_pidlist[i]= NULL;
 +	}
-+//	lock_release(&g_lk_pid);
++	//	lock_release(&g_lk_pid);
 +
 +	//let us assume this is the init process/thread set the pid to 1
 +	curthread->pid = PID_MIN;
@@ -1745,6 +1807,7 @@ index a6f45c8..331ac40 100644
 +	pident->sem = sem_create("threadsem", 0);
 +	g_pidlist[PID_MIN] = pident;
 +
++	V(g_runprogsem);
 +
 +
 +
@@ -1752,25 +1815,34 @@ index a6f45c8..331ac40 100644
 +	//Copy the arguments to userstack
 +	j=0;
 +	int * userAddr=(int *)(stackptr-size);
++
 +	while(j<argc){
-+		*(kargv + j*4)=(*(kargv + j*4))+(int)userAddr;
-+		//userAddr+=32;
++		ka = (int*)(kargv + j*4);
++		*ka=*ka+(int)userAddr;
++		//userAddr+=2;
 +		j++;
 +	}
 +	copyout(kargv, (userptr_t)userAddr, (size_t)size);
 +	//Copied to user space
 +
++	char* copyinstack = kmalloc(size);
++	copyin((userptr_t)userAddr,(void *)copyinstack,(size_t)size);
++
++	int k=0;
++	for(k=0;k<size;k++)
++	{
++		kprintf("%c", copyinstack[i]);
++	}
++	//while(1);
++	/* Warp to user mode. */
++	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
++
  	/* Warp to user mode. */
 -	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
 -			  stackptr, entrypoint);
 -	
-+	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
-+
-+
-+
-+	/* Warp to user mode. */
-+//	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-+//			stackptr, entrypoint);
++	//	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
++	//			stackptr, entrypoint);
 +
  	/* enter_new_process does not return. */
  	panic("enter_new_process returned\n");
@@ -2441,10 +2513,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..35cc730
+index 0000000..450fa0b
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,2370 @@
+@@ -0,0 +1,2377 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -2696,7 +2768,7 @@ index 0000000..35cc730
 + void menu(char *argstr);
 + 
 +diff --git a/kern/include/thread.h b/kern/include/thread.h
-+index 86706ca..0ed54b0 100644
++index 86706ca..05f5f0f 100644
 +--- a/kern/include/thread.h
 ++++ b/kern/include/thread.h
 +@@ -38,6 +38,8 @@
@@ -2752,7 +2824,7 @@ index 0000000..35cc730
 ++struct lock* g_lk_pid;
 ++int createpid(struct thread* newthread, pid_t *ret);
 ++
-++
+++struct semaphore *g_runprogsem;
 + /* Call once during system startup to allocate data structures. */
 + void thread_bootstrap(void);
 + 
@@ -2844,10 +2916,19 @@ index 0000000..35cc730
 +  * Kernel main. Boot up, then fork the menu thread; wait for a reboot
 +  * request, and then shut down.
 +diff --git a/kern/startup/menu.c b/kern/startup/menu.c
-+index 6c71551..899257c 100644
++index 6c71551..8864353 100644
 +--- a/kern/startup/menu.c
 ++++ b/kern/startup/menu.c
-+@@ -100,7 +100,7 @@ cmd_progthread(void *ptr, unsigned long nargs)
++@@ -81,6 +81,8 @@ getinterval(time_t s1, uint32_t ns1, time_t s2, uint32_t ns2,
++  * It copies the program name because runprogram destroys the copy
++  * it gets by passing it to vfs_open(). 
++  */
+++
+++
++ static
++ void
++ cmd_progthread(void *ptr, unsigned long nargs)
++@@ -100,13 +102,15 @@ cmd_progthread(void *ptr, unsigned long nargs)
 + 
 + 	strcpy(progname, args[0]);
 + 
@@ -2856,6 +2937,54 @@ index 0000000..35cc730
 + 	if (result) {
 + 		kprintf("Running program %s failed: %s\n", args[0],
 + 			strerror(result));
++ 		return;
++ 	}
++ 
+++	sys_exit(0);
+++
++ 	/* NOTREACHED: runprogram only returns on error. */
++ }
++ 
++@@ -122,6 +126,9 @@ cmd_progthread(void *ptr, unsigned long nargs)
++  * array and strings, until you do this a race condition exists
++  * between that code and the menu input code.
++  */
+++
+++
+++
++ static
++ int
++ common_prog(int nargs, char **args)
++@@ -132,16 +139,28 @@ common_prog(int nargs, char **args)
++ 	kprintf("Warning: this probably won't work with a "
++ 		"synchronization-problems kernel.\n");
++ #endif
+++	g_runprogsem = sem_create("run prog sem",0);
++ 
+++	struct thread *child = NULL;
++ 	result = thread_fork(args[0] /* thread name */,
++ 			cmd_progthread /* thread function */,
++ 			args /* thread arg */, nargs /* thread arg */,
++-			NULL);
+++			&child);
++ 	if (result) {
++ 		kprintf("thread_fork failed: %s\n", strerror(result));
++ 		return result;
++ 	}
++ 
+++	P(g_runprogsem);
+++	int status;
+++	int pid;
+++	result = sys_waitpid(2, &status,0, &pid );
+++	if (result) {
+++			kprintf("wait on user thread failed: %s\n", strerror(result));
+++			return result;
+++	}
+++	sem_destroy(g_runprogsem);
+++
++ 	return 0;
++ }
++ 
 +diff --git a/kern/synchprobs/drivers.c b/kern/synchprobs/drivers.c
 +index 02e336f..a4ba023 100644
 +--- a/kern/synchprobs/drivers.c
@@ -3586,10 +3715,10 @@ index 0000000..35cc730
 ++}
 +diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 +new file mode 100644
-+index 0000000..9dbfb09
++index 0000000..c3521be
 +--- /dev/null
 ++++ b/kern/syscall/proc_syscalls.c
-+@@ -0,0 +1,443 @@
++@@ -0,0 +1,447 @@
 ++#include <types.h>
 ++#include <syscall.h>
 ++#include <kern/errno.h>
@@ -3790,40 +3919,42 @@ index 0000000..35cc730
 ++	int result;
 ++
 ++	//Copy the arguments into kernel buffer
-++	int i=0;
+++	unsigned long j=0;
 ++	size_t strlen=0;
 ++	int size=0;
-++	int argc;
+++	unsigned long argc;
 ++	//Calculate the size of the array to allocate
 ++	char * tempArgs=kmalloc(1000);
 ++
-++	while(args[i]!=NULL){
-++		copyinstr((userptr_t)args[i], tempArgs, 1000,&strlen);
+++	while(args[j]!=NULL){
+++		//strlen = kstrcpy(args[j], tempArgs);//
+++		copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
 ++		strlen=strlen + 4 - strlen%4;
 ++		size+=strlen;
-++		i++;
+++		j++;
 ++	}
-++	argc=i+1;
+++	argc=j;
 ++	//Add space for 4 integers
 ++	size+=argc*4;
+++	size+=4;//for Null
 ++
 ++	char * kargv= kmalloc(size);
-++	int top=argc*4;
-++	i=0;
-++	while(args[i]!=NULL){
+++	int top=argc*4+4;
+++	j=0;
+++	while(args[j]!=NULL){
 ++		strlen=0;
-++		*((int*)(kargv + i*4))=top;
-++		copyinstr((userptr_t)args[i], kargv+top, 1000,&strlen);
+++		*((int*)(kargv + j*4))=top;
+++	//	strlen = kstrcpy(args[j], kargv+top);//
+++		copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
 ++		top+=strlen;
 ++		while(top%4!=0){
 ++			*(kargv+top)='\0';
 ++			top++;
 ++		}
-++		i++;
+++		j++;
 ++	}
-++	int * ka = (int*)(kargv + i*4);
-++	(ka)=NULL;
-++
+++	int * ka = (int*)(kargv + j*4);
+++	*(ka)=0;
 ++	//kargv is constructed
 ++
 ++	/* Open the file. */
@@ -3851,18 +3982,20 @@ index 0000000..35cc730
 ++	}
 ++
 ++	//Copy the arguments to userstack
-++	i=0;
-++	int userAddr=stackptr-size;
-++	while(i<argc){
-++		*(kargv + i*4)=(*(kargv + i*4))+userAddr;
-++		//userAddr+=32;
-++		i++;
+++	j=0;
+++	int * userAddr=(int *)(stackptr-size);
+++
+++	while(j<argc){
+++		ka = (int*)(kargv + j*4);
+++		*ka=*ka+(int)userAddr;
+++		//userAddr+=2;
+++		j++;
 ++	}
 ++	copyout(kargv, (userptr_t)userAddr, (size_t)size);
 ++	//Copied to user space
-++
+++	kfree(tempArgs);
 ++	/* Warp to user mode. */
-++	enter_new_process(argc-1, (userptr_t)(stackptr-size),stackptr, entrypoint);
+++	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
 ++
 ++	/* enter_new_process does not return. */
 ++	panic("enter_new_process returned\n");
@@ -4034,7 +4167,7 @@ index 0000000..35cc730
 ++	return ENPROC;
 ++}
 +diff --git a/kern/syscall/runprogram.c b/kern/syscall/runprogram.c
-+index a6f45c8..331ac40 100644
++index a6f45c8..9fd3e7b 100644
 +--- a/kern/syscall/runprogram.c
 ++++ b/kern/syscall/runprogram.c
 +@@ -44,6 +44,19 @@
@@ -4057,7 +4190,7 @@ index 0000000..35cc730
 + 
 + /*
 +  * Load program "progname" and start running it in usermode.
-+@@ -52,12 +65,52 @@
++@@ -52,12 +65,53 @@
 +  * Calls vfs_open on progname and thus may destroy it.
 +  */
 + int
@@ -4069,41 +4202,42 @@ index 0000000..35cc730
 + 	int result;
 + 
 ++	//Copy the arguments into kernel buffer
-++		unsigned long j=0;
-++		size_t strlen=0;
-++		int size=0;
-++		unsigned long argc;
-++		//Calculate the size of the array to allocate
-++		char * tempArgs=kmalloc(1000);
+++	unsigned long j=0;
+++	size_t strlen=0;
+++	int size=0;
+++	unsigned long argc;
+++	//Calculate the size of the array to allocate
+++	char * tempArgs=kmalloc(1000);
 ++
-++		while(j< nargs){
-++			strlen = kstrcpy(args[j], tempArgs);//copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
-++			strlen=strlen + 4 - strlen%4;
-++			size+=strlen;
-++			j++;
+++	while(j< nargs){
+++		strlen = kstrcpy(args[j], tempArgs);//copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
+++		strlen=strlen + 4 - strlen%4;
+++		size+=strlen;
+++		j++;
+++	}
+++	argc=j;
+++	//Add space for 4 integers
+++	size+=argc*4;
+++	size+=4;//for Null
+++
+++	char * kargv= kmalloc(size);
+++	int top=argc*4+4;
+++	j=0;
+++	while(j< nargs){
+++		strlen=0;
+++		*((int*)(kargv + j*4))=top;
+++		strlen = kstrcpy(args[j], kargv+top);//copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
+++		top+=strlen;
+++		while(top%4!=0){
+++			*(kargv+top)='\0';
+++			top++;
 ++		}
-++		argc=j;
-++		//Add space for 4 integers
-++		size+=argc*4;
+++		j++;
+++	}
+++	int * ka = (int*)(kargv + j*4);
+++	*(ka)=0;
 ++
-++		char * kargv= kmalloc(size);
-++		int top=argc*4;
-++		j=0;
-++		while(j< nargs){
-++			strlen=0;
-++			*((int*)(kargv + j*4))=top;
-++			strlen = kstrcpy(args[j], kargv+top);//copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
-++			top+=strlen;
-++			while(top%4!=0){
-++				*(kargv+top)='\0';
-++				top++;
-++			}
-++			j++;
-++		}
-++		int * ka = (int*)(kargv + j*4);
-++		*(ka)=0;
-++
-++		//kargv is constructed
+++	//kargv is constructed
 ++
 ++
 ++
@@ -4111,7 +4245,7 @@ index 0000000..35cc730
 + 	/* Open the file. */
 + 	result = vfs_open(progname, O_RDONLY, 0, &v);
 + 	if (result) {
-+@@ -95,12 +148,108 @@ runprogram(char *progname)
++@@ -95,12 +149,118 @@ runprogram(char *progname)
 + 		return result;
 + 	}
 + 
@@ -4176,12 +4310,12 @@ index 0000000..35cc730
 ++
 ++
 ++
-++//	lock_acquire(&g_lk_pid);
+++	//	lock_acquire(&g_lk_pid);
 ++	for(i=3; i<PID_MAX; i++)
 ++	{
 ++		g_pidlist[i]= NULL;
 ++	}
-++//	lock_release(&g_lk_pid);
+++	//	lock_release(&g_lk_pid);
 ++
 ++	//let us assume this is the init process/thread set the pid to 1
 ++	curthread->pid = PID_MIN;
@@ -4192,6 +4326,7 @@ index 0000000..35cc730
 ++	pident->sem = sem_create("threadsem", 0);
 ++	g_pidlist[PID_MIN] = pident;
 ++
+++	V(g_runprogsem);
 ++
 ++
 ++
@@ -4199,25 +4334,34 @@ index 0000000..35cc730
 ++	//Copy the arguments to userstack
 ++	j=0;
 ++	int * userAddr=(int *)(stackptr-size);
+++
 ++	while(j<argc){
-++		*(kargv + j*4)=(*(kargv + j*4))+(int)userAddr;
-++		//userAddr+=32;
+++		ka = (int*)(kargv + j*4);
+++		*ka=*ka+(int)userAddr;
+++		//userAddr+=2;
 ++		j++;
 ++	}
 ++	copyout(kargv, (userptr_t)userAddr, (size_t)size);
 ++	//Copied to user space
 ++
+++	char* copyinstack = kmalloc(size);
+++	copyin((userptr_t)userAddr,(void *)copyinstack,(size_t)size);
+++
+++	int k=0;
+++	for(k=0;k<size;k++)
+++	{
+++		kprintf("%c", copyinstack[i]);
+++	}
+++	//while(1);
+++	/* Warp to user mode. */
+++	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
+++
 + 	/* Warp to user mode. */
 +-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
 +-			  stackptr, entrypoint);
 +-	
-++	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
-++
-++
-++
-++	/* Warp to user mode. */
-++//	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-++//			stackptr, entrypoint);
+++	//	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+++	//			stackptr, entrypoint);
 ++
 + 	/* enter_new_process does not return. */
 + 	panic("enter_new_process returned\n");
@@ -4750,74 +4894,9 @@ index 0000000..35cc730
 + 	switch (newstate) {
 +-	    case S_RUN:
 ++	case S_RUN:
-+ 		panic("Illegal S_RUN in thread_switch\n");
-+ 		break;
-+-	    case S_READY:
-++	case S_READY:
-+ 		thread_make_runnable(cur, true /*have lock*/);
-+ 		break;
-+-	    case S_SLEEP:
-++	case S_SLEEP:
-+ 		cur->t_wchan_name = wc->wc_name;
-+ 		/*
-+ 		 * Add the thread to the list in the wait channel, and
-+@@ -611,7 +636,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
-+ 		threadlist_addtail(&wc->wc_threads, cur);
-+ 		wchan_unlock(wc);
-+ 		break;
-+-	    case S_ZOMBIE:
-++	case S_ZOMBIE:
-+ 		cur->t_wchan_name = "ZOMBIE";
-+ 		threadlist_addtail(&curcpu->c_zombies, cur);
-+ 		break;
-+@@ -736,7 +761,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
-+  */
-+ void
-+ thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
-+-	       void *data1, unsigned long data2)
-++		void *data1, unsigned long data2)
-+ {
-+ 	struct thread *cur;
-+ 
-+@@ -817,8 +842,9 @@ thread_exit(void)
-+ 	/* Check the stack guard band. */
-+ 	thread_checkstack(cur);
-+ 
-++
-+ 	/* Interrupts off on this processor */
-+-        splhigh();
-++	splhigh();
-+ 	thread_switch(S_ZOMBIE, NULL);
-+ 	panic("The zombie walks!\n");
-+ }
-+@@ -845,14 +871,14 @@ thread_yield(void)
-+ void
-+ schedule(void)
-+ {
-+-  // 28 Feb 2012 : GWA : Leave the default scheduler alone!
-++	// 28 Feb 2012 : GWA : Leave the default scheduler alone!
-+ }
-+ #else
-+ void
-+ schedule(void)
-+ {
-+-  // 28 Feb 2012 : GWA : Implement your scheduler that prioritizes
-+-  // "interactive" threads here.
-++	// 28 Feb 2012 : GWA : Implement your scheduler that prioritizes
-++	// "interactive" threads here.
-+ }
-+ #endif
-+ 
-+@@ -947,8 +973,8 @@ thread_consider_migration(void)
-+ 			t->t_cpu = c;
-+ 			threadlist_addtail(&c->c_runqueue, t);
-+ 			DEBUG(DB_THREADS,
-+-			      "Migrated thread %s: cpu %u -> %u",
-+-			      t->t_name, curcpu->c_number, c->c_number);
-++				
 \ No newline at end of file
 diff --git a/user/testbin/forktest/forktest.c b/user/testbin/forktest/forktest.c
-index 50d72b0..d8e6665 100644
+index 50d72b0..c8599a6 100644
 --- a/user/testbin/forktest/forktest.c
 +++ b/user/testbin/forktest/forktest.c
 @@ -41,6 +41,7 @@
@@ -4839,6 +4918,21 @@ index 50d72b0..d8e6665 100644
  		}
  	}
  }
+@@ -170,7 +171,13 @@ int
+ main(int argc, char *argv[])
+ {
+ 	int nowait=0;
+-
++//	char teststr[20];
++//	int k;
++//	for(k=0;k< 5; k++)
++//		teststr[k]=getchar();
++//	teststr[k]='\0';
++//	printf("%s", teststr);
++//	while(1);
+ 	if (argc==2 && !strcmp(argv[1], "-w")) {
+ 		nowait=1;
+ 	}
 diff --git a/user/testbin/mytest/Makefile b/user/testbin/mytest/Makefile
 new file mode 100644
 index 0000000..7aa05e4

@@ -101,7 +101,6 @@ syscall(struct trapframe *tf)
 	retval = 0;
 	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 	off_t pos;
-	int status=0;
 
 	switch (callno) {
 	case SYS_reboot:
@@ -174,8 +173,8 @@ syscall(struct trapframe *tf)
 		err = sys_fork(tf, &retval);
 		break;
 	case SYS_waitpid:
-		err = sys_waitpid(tf->tf_a0,&status,tf->tf_a2,&retval);
-		copyout(&status,(userptr_t)tf->tf_a1,sizeof(int));
+		err = sys_waitpid(tf->tf_a0,(userptr_t)tf->tf_a1,tf->tf_a2,&retval,0);
+		//copyout(&status,(userptr_t)tf->tf_a1,sizeof(int));
 		break;
 	case SYS__exit:
 		sys_exit(tf->tf_a0);

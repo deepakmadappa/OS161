@@ -13,7 +13,7 @@
 #include <mips/trapframe.h>
 #include <synch.h>
 #include <copyinout.h>
-
+#include <kern/wait.h>
 void clonetrapframe(struct trapframe *inframe, struct trapframe *returnframe)
 {
 	//struct trapframe* returnframe = kmalloc(sizeof(struct trapframe));
@@ -120,6 +120,7 @@ struct message
 	struct trapframe *tf;
 	struct addrspace *as;
 	struct semaphore *sem;
+	int *pid;
 };
 
 int sys_fork(struct trapframe *ptf, pid_t *pid)
@@ -140,16 +141,17 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 	msg->as = childas;
 	msg->tf= ptf;
 	msg->sem = s;
+	msg->pid = kmalloc(sizeof(int));
 	struct thread* child=NULL;
 	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 	P(s);
-
+	*pid = *(msg->pid);
 	kfree(msg->sem);
+	kfree(msg->pid);
 	kfree(msg);
 
 	if(err)
 		return err;
-	*pid = child->pid;
 	return 0;
 }
 
@@ -190,8 +192,29 @@ The following error codes should be returned under the conditions given. Other e
     EFAULT		One of the args is an invalid pointer.
  */
 
-int sys_execv(userptr_t program, userptr_t argsptr)
+int sys_execv(userptr_t prog, userptr_t argsptr)
 {
+	char *program = kmalloc(1000);
+	size_t proglen;
+
+	int err = copyin(argsptr, program,1); // doing this just to make sure its valid address
+	if(err)
+	{
+			kfree(program);
+			return EFAULT;
+	}
+
+	err = copyinstr(prog, program, 1000, &proglen);
+	if(err)
+	{
+			kfree(program);
+			return EFAULT;
+	}
+	if(err)
+	{
+		kfree(program);
+		return EFAULT;
+	}
 	char** args=(char**)argsptr;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
@@ -207,7 +230,12 @@ int sys_execv(userptr_t program, userptr_t argsptr)
 
 	while(args[j]!=NULL){
 		//strlen = kstrcpy(args[j], tempArgs);//
-		copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
+		err = copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
+		if(err)
+		{
+			kfree(tempArgs);
+			return EFAULT;
+		}
 		strlen=strlen + 4 - strlen%4;
 		size+=strlen;
 		j++;
@@ -273,6 +301,7 @@ int sys_execv(userptr_t program, userptr_t argsptr)
 	copyout(kargv, (userptr_t)userAddr, (size_t)size);
 	//Copied to user space
 	kfree(tempArgs);
+	kfree(kargv);
 	/* Warp to user mode. */
 	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
 
@@ -332,11 +361,10 @@ The following error codes should be returned under the conditions given. Other e
     ESRCH		The pid argument named a nonexistent process.
     EFAULT		The status argument was an invalid pointer.
  */
-int sys_waitpid(pid_t pid, int *status, int options, int *retval)
+int sys_waitpid(pid_t pid, userptr_t status, int options, int *retval, int iskernspace)
 {
 	if(options!=0)
 		return EINVAL;
-
 
 	//if waitOnThread==NULL or exitSemaphore[i]==NULL(Thread exited or does not exist)
 	//then exitCode[i]==-1 thread does not exist or exit code collected
@@ -348,30 +376,37 @@ int sys_waitpid(pid_t pid, int *status, int options, int *retval)
 	//As described under _exit(), precisely what is meant by "interested" is up to you...Decide on this
 	//TO allow only parents to wait on child, check if current threads Pid is PPID of the child thread. But this wont work with already exited thread.
 	//Status yet to understand
+	if(iskernspace == 1)
+	{
+		*((int*)status) = g_pidlist[pid]->exitstatus;
+	}
+	else
+	{
+		int err = copyout(&(g_pidlist[pid]->exitstatus), status, sizeof(int));
+		if(err)
+			return err;
+	}
 
-	//Do i need to cast pID to int??
-	if(status==NULL){
-		return EFAULT;
-	}else if(g_pidlist[pid]==NULL){
+	if(pid<PID_MIN || pid > PID_MAX)
+		return ESRCH;
+	if(g_pidlist[pid]==NULL){
 		//The pid argument named a nonexistent process.
 		return ESRCH;
-
-	}else {
-		//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
-		//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
-		struct thread* waitOnThread=g_pidlist[pid]->thread;
-
-		//TODO: need to add PPID to pidentry struct only parent should be able to collect
-		if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
-			return ECHILD;
-		P(g_pidlist[pid]->sem);
-		*status=g_pidlist[pid]->exitstatus;
-		sem_destroy(g_pidlist[pid]->sem);
-		kfree(g_pidlist[pid]);
-		g_pidlist[pid]=NULL;
-		*retval=pid;
-		return 0;
 	}
+	//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
+	//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
+	struct thread* waitOnThread=g_pidlist[pid]->thread;
+
+	//TODO: need to add PPID to pidentry struct only parent should be able to collect
+	if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
+		return ECHILD;
+	P(g_pidlist[pid]->sem);
+	sem_destroy(g_pidlist[pid]->sem);
+	kfree(g_pidlist[pid]);
+	g_pidlist[pid]=NULL;
+	*retval=pid;
+	return 0;
+
 }
 
 /*
@@ -393,7 +428,7 @@ _exit does not return.
 void sys_exit(int exitcode)
 {
 	int pid=curthread->pid;
-	g_pidlist[pid]->exitstatus=exitcode;
+	g_pidlist[pid]->exitstatus=_MKWAIT_EXIT(exitcode);
 	g_pidlist[pid]->thread = NULL;
 	V(g_pidlist[pid]->sem);
 	thread_exit();
@@ -409,7 +444,7 @@ void child_fork(void* data1, unsigned long data2)
 	curthread->t_addrspace = as;
 	as_activate(curthread->t_addrspace);
 
-
+	*(msg->pid) = curthread->pid;
 	struct trapframe tf;
 	clonetrapframe(ptf, &tf);
 

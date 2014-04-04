@@ -152,9 +152,9 @@ common_prog(int nargs, char **args)
 	}
 
 	P(g_runprogsem);
-	int status;
+	int *status = kmalloc(sizeof(int));
 	int pid;
-	result = sys_waitpid(2, &status,0, &pid );
+	result = sys_waitpid(2, (userptr_t)(&status),0, &pid, 1);
 	if (result) {
 			kprintf("wait on user thread failed: %s\n", strerror(result));
 			return result;

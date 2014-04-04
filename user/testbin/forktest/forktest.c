@@ -171,7 +171,13 @@ int
 main(int argc, char *argv[])
 {
 	int nowait=0;
-
+//	char teststr[20];
+//	int k;
+//	for(k=0;k< 5; k++)
+//		teststr[k]=getchar();
+//	teststr[k]='\0';
+//	printf("%s", teststr);
+//	while(1);
 	if (argc==2 && !strcmp(argv[1], "-w")) {
 		nowait=1;
 	}
