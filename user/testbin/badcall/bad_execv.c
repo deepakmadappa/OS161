@@ -63,7 +63,7 @@ exec_common_fork(void)
 		return -1;
 	}
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != MAGIC_STATUS) {
-		warnx("FAILURE: wrong exit code of subprocess");
+		warnx("FAILURE: wrong exit code of subprocess %d, %d, %d", status, WIFEXITED(status), WEXITSTATUS(status));
 	}
 	return 1;
 }

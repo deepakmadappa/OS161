@@ -354,11 +354,15 @@ int sys_dup2(int oldfd, int newfd, int * retval)
 		return EBADF;
 	}else{
 		fh = cur->filetable[newfd];
-		if(fh != NULL){
-			//Close this file
-			vfs_close(fh->fileobject);
-			kfree(fh);
-		}
+	    if((newfd!=oldfd)&&fh != NULL){
+	            //Close this file
+	            if(fh->refcount<=1){
+	                vfs_close(fh->fileobject);
+	                kfree(fh);
+	            }else{
+	                fh->refcount--;
+	            }
+	        }
 		cur->filetable[newfd] = cur->filetable[oldfd];
 		*retval=newfd;
 		return 0;

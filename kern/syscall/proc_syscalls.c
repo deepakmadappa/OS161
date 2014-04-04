@@ -376,16 +376,14 @@ int sys_waitpid(pid_t pid, userptr_t status, int options, int *retval, int isker
 	//As described under _exit(), precisely what is meant by "interested" is up to you...Decide on this
 	//TO allow only parents to wait on child, check if current threads Pid is PPID of the child thread. But this wont work with already exited thread.
 	//Status yet to understand
-	if(iskernspace == 1)
+	int exit = 0;
+	if(iskernspace == 0)//copysomevalue to check if its valid
 	{
-		*((int*)status) = g_pidlist[pid]->exitstatus;
-	}
-	else
-	{
-		int err = copyout(&(g_pidlist[pid]->exitstatus), status, sizeof(int));
+		int err = copyout(&exit, status, sizeof(int));
 		if(err)
 			return err;
 	}
+
 
 	if(pid<PID_MIN || pid > PID_MAX)
 		return ESRCH;
@@ -401,6 +399,19 @@ int sys_waitpid(pid_t pid, userptr_t status, int options, int *retval, int isker
 	if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
 		return ECHILD;
 	P(g_pidlist[pid]->sem);
+
+	exit = _MKWAIT_EXIT(g_pidlist[pid]->exitstatus);
+		if(iskernspace == 1)
+		{
+			*((int*)status) = g_pidlist[pid]->exitstatus;
+		}
+		else
+		{
+			int err = copyout(&exit, status, sizeof(int));
+			if(err)
+				return err;
+		}
+
 	sem_destroy(g_pidlist[pid]->sem);
 	kfree(g_pidlist[pid]);
 	g_pidlist[pid]=NULL;
@@ -428,7 +439,7 @@ _exit does not return.
 void sys_exit(int exitcode)
 {
 	int pid=curthread->pid;
-	g_pidlist[pid]->exitstatus=_MKWAIT_EXIT(exitcode);
+	g_pidlist[pid]->exitstatus=exitcode;//_MKWAIT_EXIT(exitcode);
 	g_pidlist[pid]->thread = NULL;
 	V(g_pidlist[pid]->sem);
 	thread_exit();
