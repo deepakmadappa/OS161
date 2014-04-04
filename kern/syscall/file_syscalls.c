@@ -422,6 +422,8 @@ The following error codes should be returned under the conditions given. Other e
  */
 int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret)
 {
+	if(buflen > PATH_MAX)
+		buflen = PATH_MAX;
 	//	struct thread *cur = (struct thread*)curthread;
 	struct iovec iov;
 	struct uio ku;

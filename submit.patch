@@ -751,7 +751,7 @@ index 81d2f0e..78082a2 100644
  }
 diff --git a/kern/syscall/file_syscalls.c b/kern/syscall/file_syscalls.c
 new file mode 100644
-index 0000000..8f63055
+index 0000000..b323c82
 --- /dev/null
 +++ b/kern/syscall/file_syscalls.c
 @@ -0,0 +1,443 @@
@@ -899,6 +899,12 @@ index 0000000..8f63055
 +	if(err)
 +		return err;
 +	*bytesread = buflen - ku.uio_resid;
++	if(*bytesread==0){
++		lock_release(fh->lk_fileaccess);
++		kfree(readbuf);
++		return 0;
++	}
++
 +	fh->offset += *bytesread;
 +
 +	lock_release(fh->lk_fileaccess);
@@ -907,7 +913,6 @@ index 0000000..8f63055
 +		return err;
 +
 +	kfree(readbuf);
-+
 +	return 0;
 +}
 +
@@ -1112,13 +1117,6 @@ index 0000000..8f63055
 +	}else{
 +		fh = cur->filetable[newfd];
 +	    if((newfd!=oldfd)&&fh != NULL){
-+	            //Close this file
-+	      /*      if(fh->refcount<=1){
-+	                vfs_close(fh->fileobject);
-+	                kfree(fh);
-+	            }else{
-+	                fh->refcount--;
-+	            }*/
 +	            sys_close(newfd);
 +	        }
 +		cur->filetable[newfd] = cur->filetable[oldfd];
@@ -1181,6 +1179,8 @@ index 0000000..8f63055
 + */
 +int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret)
 +{
++	if(buflen > PATH_MAX)
++		buflen = PATH_MAX;
 +	//	struct thread *cur = (struct thread*)curthread;
 +	struct iovec iov;
 +	struct uio ku;
@@ -2563,10 +2563,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..733909b
+index 0000000..20d5bcd
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,2542 @@
+@@ -0,0 +1,2549 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -3320,7 +3320,7 @@ index 0000000..733909b
 + }
 +diff --git a/kern/syscall/file_syscalls.c b/kern/syscall/file_syscalls.c
 +new file mode 100644
-+index 0000000..8f63055
++index 0000000..b323c82
 +--- /dev/null
 ++++ b/kern/syscall/file_syscalls.c
 +@@ -0,0 +1,443 @@
@@ -3468,6 +3468,12 @@ index 0000000..733909b
 ++	if(err)
 ++		return err;
 ++	*bytesread = buflen - ku.uio_resid;
+++	if(*bytesread==0){
+++		lock_release(fh->lk_fileaccess);
+++		kfree(readbuf);
+++		return 0;
+++	}
+++
 ++	fh->offset += *bytesread;
 ++
 ++	lock_release(fh->lk_fileaccess);
@@ -3476,7 +3482,6 @@ index 0000000..733909b
 ++		return err;
 ++
 ++	kfree(readbuf);
-++
 ++	return 0;
 ++}
 ++
@@ -3681,13 +3686,6 @@ index 0000000..733909b
 ++	}else{
 ++		fh = cur->filetable[newfd];
 ++	    if((newfd!=oldfd)&&fh != NULL){
-++	            //Close this file
-++	      /*      if(fh->refcount<=1){
-++	                vfs_close(fh->fileobject);
-++	                kfree(fh);
-++	            }else{
-++	                fh->refcount--;
-++	            }*/
 ++	            sys_close(newfd);
 ++	        }
 ++		cur->filetable[newfd] = cur->filetable[oldfd];
@@ -3750,6 +3748,8 @@ index 0000000..733909b
 ++ */
 ++int sys___getcwd(userptr_t buf, size_t buflen, int32_t *ret)
 ++{
+++	if(buflen > PATH_MAX)
+++		buflen = PATH_MAX;
 ++	//	struct thread *cur = (struct thread*)curthread;
 ++	struct iovec iov;
 ++	struct uio ku;
@@ -5108,7 +5108,14 @@ index 0000000..733909b
 ++
 ++off_t vfs_lseek(struct vnode *vn, off_t pos)
 ++{
-++	int res
+++	int result;
+++	result = VOP_TRYSEEK(vn, pos);
+++
+++	return result;
+++}
+++
++ /*
++  * Does mo
 \ No newline at end of file
 diff --git a/user/testbin/badcall/bad_execv.c b/user/testbin/badcall/bad_execv.c
 index 287a678..c0a6588 100644

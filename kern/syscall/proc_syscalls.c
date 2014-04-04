@@ -136,12 +136,17 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 	if(err)
 		return err;
 	struct message* msg = kmalloc(sizeof(struct message));
-
+	if(msg == NULL)
+		KASSERT("malloc failed");
 	struct semaphore* s = sem_create("forksem",0);
+	if(s == NULL)
+		KASSERT("Create Semaphore failed");
 	msg->as = childas;
 	msg->tf= ptf;
 	msg->sem = s;
 	msg->pid = kmalloc(sizeof(int));
+	if(msg->pid == NULL)
+		KASSERT("malloc failed");
 	struct thread* child=NULL;
 	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 	P(s);
