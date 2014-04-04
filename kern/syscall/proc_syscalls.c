@@ -485,6 +485,8 @@ int createpid(struct thread* newthread, pid_t *ret)
 		if(g_pidlist[i] == NULL)
 		{
 			struct pidentry *pident = kmalloc(sizeof(struct pidentry));
+			if(pident == NULL)
+				KASSERT("malloc failed");
 			pident->exitstatus = 0;
 			pident->thread = newthread;
 			pident->sem = sem_create("threadsem", 0);
