@@ -142,6 +142,12 @@ int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 	if(err)
 		return err;
 	*bytesread = buflen - ku.uio_resid;
+	if(*bytesread==0){
+		lock_release(fh->lk_fileaccess);
+		kfree(readbuf);
+		return 0;
+	}
+
 	fh->offset += *bytesread;
 
 	lock_release(fh->lk_fileaccess);
@@ -150,7 +156,6 @@ int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 		return err;
 
 	kfree(readbuf);
-
 	return 0;
 }
 
@@ -355,13 +360,7 @@ int sys_dup2(int oldfd, int newfd, int * retval)
 	}else{
 		fh = cur->filetable[newfd];
 	    if((newfd!=oldfd)&&fh != NULL){
-	            //Close this file
-	            if(fh->refcount<=1){
-	                vfs_close(fh->fileobject);
-	                kfree(fh);
-	            }else{
-	                fh->refcount--;
-	            }
+	            sys_close(newfd);
 	        }
 		cur->filetable[newfd] = cur->filetable[oldfd];
 		*retval=newfd;

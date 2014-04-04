@@ -12,7 +12,7 @@ index 993b10c..c3c63dd 100644
   * MIPS exception codes.
   */
 diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
-index 0f773bd..63b2105 100644
+index 0f773bd..70b882e 100644
 --- a/kern/arch/mips/syscall/syscall.c
 +++ b/kern/arch/mips/syscall/syscall.c
 @@ -35,6 +35,7 @@
@@ -23,7 +23,7 @@ index 0f773bd..63b2105 100644
  
  
  /*
-@@ -96,22 +97,100 @@ syscall(struct trapframe *tf)
+@@ -96,22 +97,99 @@ syscall(struct trapframe *tf)
  	 * deal with it except for calls that return other values, 
  	 * like write.
  	 */
@@ -32,7 +32,6 @@ index 0f773bd..63b2105 100644
  	retval = 0;
 +	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 +	off_t pos;
-+	int status=0;
  
  	switch (callno) {
 -	    case SYS_reboot:
@@ -111,8 +110,8 @@ index 0f773bd..63b2105 100644
 +		err = sys_fork(tf, &retval);
 +		break;
 +	case SYS_waitpid:
-+		err = sys_waitpid(tf->tf_a0,&status,tf->tf_a2,&retval);
-+		copyout(&status,(userptr_t)tf->tf_a1,sizeof(int));
++		err = sys_waitpid(tf->tf_a0,(userptr_t)tf->tf_a1,tf->tf_a2,&retval,0);
++		//copyout(&status,(userptr_t)tf->tf_a1,sizeof(int));
 +		break;
 +	case SYS__exit:
 +		sys_exit(tf->tf_a0);
@@ -131,7 +130,7 @@ index 0f773bd..63b2105 100644
  		kprintf("Unknown syscall %d\n", callno);
  		err = ENOSYS;
  		break;
-@@ -132,12 +211,12 @@ syscall(struct trapframe *tf)
+@@ -132,12 +210,12 @@ syscall(struct trapframe *tf)
  		tf->tf_v0 = retval;
  		tf->tf_a3 = 0;      /* signal no error */
  	}
@@ -198,7 +197,7 @@ index ac3714b..48e2d18 100644
  
  struct rwlock * rwlock_create(const char *);
 diff --git a/kern/include/syscall.h b/kern/include/syscall.h
-index befd3d8..7ff2879 100644
+index befd3d8..7cab4e4 100644
 --- a/kern/include/syscall.h
 +++ b/kern/include/syscall.h
 @@ -58,4 +58,23 @@ void enter_new_process(int argc, userptr_t argv, vaddr_t stackptr,
@@ -219,7 +218,7 @@ index befd3d8..7ff2879 100644
 +pid_t sys_getpid(void);
 +int sys_fork(struct trapframe *ptf, pid_t *pid);
 +int sys_execv(userptr_t program, userptr_t args);
-+int sys_waitpid(pid_t pid, int *status, int options,int*);
++int sys_waitpid(pid_t pid, userptr_t status, int options,int*, int);
 +void sys_exit(int exitcode);
 +
 +void child_fork(void* data1, unsigned long data2);
@@ -397,7 +396,7 @@ index be4c4b8..1ebfa47 100644
   * Kernel main. Boot up, then fork the menu thread; wait for a reboot
   * request, and then shut down.
 diff --git a/kern/startup/menu.c b/kern/startup/menu.c
-index 6c71551..8864353 100644
+index 6c71551..9274d83 100644
 --- a/kern/startup/menu.c
 +++ b/kern/startup/menu.c
 @@ -81,6 +81,8 @@ getinterval(time_t s1, uint32_t ns1, time_t s2, uint32_t ns2,
@@ -454,9 +453,9 @@ index 6c71551..8864353 100644
  	}
  
 +	P(g_runprogsem);
-+	int status;
++	int *status = kmalloc(sizeof(int));
 +	int pid;
-+	result = sys_waitpid(2, &status,0, &pid );
++	result = sys_waitpid(2, (userptr_t)(&status),0, &pid, 1);
 +	if (result) {
 +			kprintf("wait on user thread failed: %s\n", strerror(result));
 +			return result;
@@ -752,10 +751,10 @@ index 81d2f0e..78082a2 100644
  }
 diff --git a/kern/syscall/file_syscalls.c b/kern/syscall/file_syscalls.c
 new file mode 100644
-index 0000000..83b73f5
+index 0000000..8f63055
 --- /dev/null
 +++ b/kern/syscall/file_syscalls.c
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,443 @@
 +#include <types.h>
 +#include <syscall.h>
 +#include <lib.h>
@@ -1112,11 +1111,16 @@ index 0000000..83b73f5
 +		return EBADF;
 +	}else{
 +		fh = cur->filetable[newfd];
-+		if(fh != NULL){
-+			//Close this file
-+			vfs_close(fh->fileobject);
-+			kfree(fh);
-+		}
++	    if((newfd!=oldfd)&&fh != NULL){
++	            //Close this file
++	      /*      if(fh->refcount<=1){
++	                vfs_close(fh->fileobject);
++	                kfree(fh);
++	            }else{
++	                fh->refcount--;
++	            }*/
++	            sys_close(newfd);
++	        }
 +		cur->filetable[newfd] = cur->filetable[oldfd];
 +		*retval=newfd;
 +		return 0;
@@ -1196,10 +1200,10 @@ index 0000000..83b73f5
 +}
 diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 new file mode 100644
-index 0000000..c3521be
+index 0000000..85d19e7
 --- /dev/null
 +++ b/kern/syscall/proc_syscalls.c
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,493 @@
 +#include <types.h>
 +#include <syscall.h>
 +#include <kern/errno.h>
@@ -1215,7 +1219,7 @@ index 0000000..c3521be
 +#include <mips/trapframe.h>
 +#include <synch.h>
 +#include <copyinout.h>
-+
++#include <kern/wait.h>
 +void clonetrapframe(struct trapframe *inframe, struct trapframe *returnframe)
 +{
 +	//struct trapframe* returnframe = kmalloc(sizeof(struct trapframe));
@@ -1322,6 +1326,7 @@ index 0000000..c3521be
 +	struct trapframe *tf;
 +	struct addrspace *as;
 +	struct semaphore *sem;
++	int *pid;
 +};
 +
 +int sys_fork(struct trapframe *ptf, pid_t *pid)
@@ -1342,16 +1347,17 @@ index 0000000..c3521be
 +	msg->as = childas;
 +	msg->tf= ptf;
 +	msg->sem = s;
++	msg->pid = kmalloc(sizeof(int));
 +	struct thread* child=NULL;
 +	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 +	P(s);
-+
++	*pid = *(msg->pid);
 +	kfree(msg->sem);
++	kfree(msg->pid);
 +	kfree(msg);
 +
 +	if(err)
 +		return err;
-+	*pid = child->pid;
 +	return 0;
 +}
 +
@@ -1392,8 +1398,29 @@ index 0000000..c3521be
 +    EFAULT		One of the args is an invalid pointer.
 + */
 +
-+int sys_execv(userptr_t program, userptr_t argsptr)
++int sys_execv(userptr_t prog, userptr_t argsptr)
 +{
++	char *program = kmalloc(1000);
++	size_t proglen;
++
++	int err = copyin(argsptr, program,1); // doing this just to make sure its valid address
++	if(err)
++	{
++			kfree(program);
++			return EFAULT;
++	}
++
++	err = copyinstr(prog, program, 1000, &proglen);
++	if(err)
++	{
++			kfree(program);
++			return EFAULT;
++	}
++	if(err)
++	{
++		kfree(program);
++		return EFAULT;
++	}
 +	char** args=(char**)argsptr;
 +	struct vnode *v;
 +	vaddr_t entrypoint, stackptr;
@@ -1409,7 +1436,12 @@ index 0000000..c3521be
 +
 +	while(args[j]!=NULL){
 +		//strlen = kstrcpy(args[j], tempArgs);//
-+		copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
++		err = copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
++		if(err)
++		{
++			kfree(tempArgs);
++			return EFAULT;
++		}
 +		strlen=strlen + 4 - strlen%4;
 +		size+=strlen;
 +		j++;
@@ -1475,6 +1507,7 @@ index 0000000..c3521be
 +	copyout(kargv, (userptr_t)userAddr, (size_t)size);
 +	//Copied to user space
 +	kfree(tempArgs);
++	kfree(kargv);
 +	/* Warp to user mode. */
 +	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
 +
@@ -1534,11 +1567,10 @@ index 0000000..c3521be
 +    ESRCH		The pid argument named a nonexistent process.
 +    EFAULT		The status argument was an invalid pointer.
 + */
-+int sys_waitpid(pid_t pid, int *status, int options, int *retval)
++int sys_waitpid(pid_t pid, userptr_t status, int options, int *retval, int iskernspace)
 +{
 +	if(options!=0)
 +		return EINVAL;
-+
 +
 +	//if waitOnThread==NULL or exitSemaphore[i]==NULL(Thread exited or does not exist)
 +	//then exitCode[i]==-1 thread does not exist or exit code collected
@@ -1550,30 +1582,48 @@ index 0000000..c3521be
 +	//As described under _exit(), precisely what is meant by "interested" is up to you...Decide on this
 +	//TO allow only parents to wait on child, check if current threads Pid is PPID of the child thread. But this wont work with already exited thread.
 +	//Status yet to understand
++	int exit = 0;
++	if(iskernspace == 0)//copysomevalue to check if its valid
++	{
++		int err = copyout(&exit, status, sizeof(int));
++		if(err)
++			return err;
++	}
 +
-+	//Do i need to cast pID to int??
-+	if(status==NULL){
-+		return EFAULT;
-+	}else if(g_pidlist[pid]==NULL){
++
++	if(pid<PID_MIN || pid > PID_MAX)
++		return ESRCH;
++	if(g_pidlist[pid]==NULL){
 +		//The pid argument named a nonexistent process.
 +		return ESRCH;
-+
-+	}else {
-+		//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
-+		//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
-+		struct thread* waitOnThread=g_pidlist[pid]->thread;
-+
-+		//TODO: need to add PPID to pidentry struct only parent should be able to collect
-+		if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
-+			return ECHILD;
-+		P(g_pidlist[pid]->sem);
-+		*status=g_pidlist[pid]->exitstatus;
-+		sem_destroy(g_pidlist[pid]->sem);
-+		kfree(g_pidlist[pid]);
-+		g_pidlist[pid]=NULL;
-+		*retval=pid;
-+		return 0;
 +	}
++	//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
++	//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
++	struct thread* waitOnThread=g_pidlist[pid]->thread;
++
++	//TODO: need to add PPID to pidentry struct only parent should be able to collect
++	if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
++		return ECHILD;
++	P(g_pidlist[pid]->sem);
++
++	exit = _MKWAIT_EXIT(g_pidlist[pid]->exitstatus);
++		if(iskernspace == 1)
++		{
++			*((int*)status) = g_pidlist[pid]->exitstatus;
++		}
++		else
++		{
++			int err = copyout(&exit, status, sizeof(int));
++			if(err)
++				return err;
++		}
++
++	sem_destroy(g_pidlist[pid]->sem);
++	kfree(g_pidlist[pid]);
++	g_pidlist[pid]=NULL;
++	*retval=pid;
++	return 0;
++
 +}
 +
 +/*
@@ -1595,7 +1645,7 @@ index 0000000..c3521be
 +void sys_exit(int exitcode)
 +{
 +	int pid=curthread->pid;
-+	g_pidlist[pid]->exitstatus=exitcode;
++	g_pidlist[pid]->exitstatus=exitcode;//_MKWAIT_EXIT(exitcode);
 +	g_pidlist[pid]->thread = NULL;
 +	V(g_pidlist[pid]->sem);
 +	thread_exit();
@@ -1611,7 +1661,7 @@ index 0000000..c3521be
 +	curthread->t_addrspace = as;
 +	as_activate(curthread->t_addrspace);
 +
-+
++	*(msg->pid) = curthread->pid;
 +	struct trapframe tf;
 +	clonetrapframe(ptf, &tf);
 +
@@ -2513,10 +2563,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..450fa0b
+index 0000000..733909b
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,2377 @@
+@@ -0,0 +1,2542 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -2531,7 +2581,7 @@ index 0000000..450fa0b
 +  * MIPS exception codes.
 +  */
 +diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
-+index 0f773bd..63b2105 100644
++index 0f773bd..70b882e 100644
 +--- a/kern/arch/mips/syscall/syscall.c
 ++++ b/kern/arch/mips/syscall/syscall.c
 +@@ -35,6 +35,7 @@
@@ -2542,7 +2592,7 @@ index 0000000..450fa0b
 + 
 + 
 + /*
-+@@ -96,22 +97,100 @@ syscall(struct trapframe *tf)
++@@ -96,22 +97,99 @@ syscall(struct trapframe *tf)
 + 	 * deal with it except for calls that return other values, 
 + 	 * like write.
 + 	 */
@@ -2551,7 +2601,6 @@ index 0000000..450fa0b
 + 	retval = 0;
 ++	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 ++	off_t pos;
-++	int status=0;
 + 
 + 	switch (callno) {
 +-	    case SYS_reboot:
@@ -2630,8 +2679,8 @@ index 0000000..450fa0b
 ++		err = sys_fork(tf, &retval);
 ++		break;
 ++	case SYS_waitpid:
-++		err = sys_waitpid(tf->tf_a0,&status,tf->tf_a2,&retval);
-++		copyout(&status,(userptr_t)tf->tf_a1,sizeof(int));
+++		err = sys_waitpid(tf->tf_a0,(userptr_t)tf->tf_a1,tf->tf_a2,&retval,0);
+++		//copyout(&status,(userptr_t)tf->tf_a1,sizeof(int));
 ++		break;
 ++	case SYS__exit:
 ++		sys_exit(tf->tf_a0);
@@ -2650,7 +2699,7 @@ index 0000000..450fa0b
 + 		kprintf("Unknown syscall %d\n", callno);
 + 		err = ENOSYS;
 + 		break;
-+@@ -132,12 +211,12 @@ syscall(struct trapframe *tf)
++@@ -132,12 +210,12 @@ syscall(struct trapframe *tf)
 + 		tf->tf_v0 = retval;
 + 		tf->tf_a3 = 0;      /* signal no error */
 + 	}
@@ -2717,7 +2766,7 @@ index 0000000..450fa0b
 + 
 + struct rwlock * rwlock_create(const char *);
 +diff --git a/kern/include/syscall.h b/kern/include/syscall.h
-+index befd3d8..7ff2879 100644
++index befd3d8..7cab4e4 100644
 +--- a/kern/include/syscall.h
 ++++ b/kern/include/syscall.h
 +@@ -58,4 +58,23 @@ void enter_new_process(int argc, userptr_t argv, vaddr_t stackptr,
@@ -2738,7 +2787,7 @@ index 0000000..450fa0b
 ++pid_t sys_getpid(void);
 ++int sys_fork(struct trapframe *ptf, pid_t *pid);
 ++int sys_execv(userptr_t program, userptr_t args);
-++int sys_waitpid(pid_t pid, int *status, int options,int*);
+++int sys_waitpid(pid_t pid, userptr_t status, int options,int*, int);
 ++void sys_exit(int exitcode);
 ++
 ++void child_fork(void* data1, unsigned long data2);
@@ -2916,7 +2965,7 @@ index 0000000..450fa0b
 +  * Kernel main. Boot up, then fork the menu thread; wait for a reboot
 +  * request, and then shut down.
 +diff --git a/kern/startup/menu.c b/kern/startup/menu.c
-+index 6c71551..8864353 100644
++index 6c71551..9274d83 100644
 +--- a/kern/startup/menu.c
 ++++ b/kern/startup/menu.c
 +@@ -81,6 +81,8 @@ getinterval(time_t s1, uint32_t ns1, time_t s2, uint32_t ns2,
@@ -2973,9 +3022,9 @@ index 0000000..450fa0b
 + 	}
 + 
 ++	P(g_runprogsem);
-++	int status;
+++	int *status = kmalloc(sizeof(int));
 ++	int pid;
-++	result = sys_waitpid(2, &status,0, &pid );
+++	result = sys_waitpid(2, (userptr_t)(&status),0, &pid, 1);
 ++	if (result) {
 ++			kprintf("wait on user thread failed: %s\n", strerror(result));
 ++			return result;
@@ -3271,10 +3320,10 @@ index 0000000..450fa0b
 + }
 +diff --git a/kern/syscall/file_syscalls.c b/kern/syscall/file_syscalls.c
 +new file mode 100644
-+index 0000000..83b73f5
++index 0000000..8f63055
 +--- /dev/null
 ++++ b/kern/syscall/file_syscalls.c
-+@@ -0,0 +1,438 @@
++@@ -0,0 +1,443 @@
 ++#include <types.h>
 ++#include <syscall.h>
 ++#include <lib.h>
@@ -3631,11 +3680,16 @@ index 0000000..450fa0b
 ++		return EBADF;
 ++	}else{
 ++		fh = cur->filetable[newfd];
-++		if(fh != NULL){
-++			//Close this file
-++			vfs_close(fh->fileobject);
-++			kfree(fh);
-++		}
+++	    if((newfd!=oldfd)&&fh != NULL){
+++	            //Close this file
+++	      /*      if(fh->refcount<=1){
+++	                vfs_close(fh->fileobject);
+++	                kfree(fh);
+++	            }else{
+++	                fh->refcount--;
+++	            }*/
+++	            sys_close(newfd);
+++	        }
 ++		cur->filetable[newfd] = cur->filetable[oldfd];
 ++		*retval=newfd;
 ++		return 0;
@@ -3715,10 +3769,10 @@ index 0000000..450fa0b
 ++}
 +diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 +new file mode 100644
-+index 0000000..c3521be
++index 0000000..85d19e7
 +--- /dev/null
 ++++ b/kern/syscall/proc_syscalls.c
-+@@ -0,0 +1,447 @@
++@@ -0,0 +1,493 @@
 ++#include <types.h>
 ++#include <syscall.h>
 ++#include <kern/errno.h>
@@ -3734,7 +3788,7 @@ index 0000000..450fa0b
 ++#include <mips/trapframe.h>
 ++#include <synch.h>
 ++#include <copyinout.h>
-++
+++#include <kern/wait.h>
 ++void clonetrapframe(struct trapframe *inframe, struct trapframe *returnframe)
 ++{
 ++	//struct trapframe* returnframe = kmalloc(sizeof(struct trapframe));
@@ -3841,6 +3895,7 @@ index 0000000..450fa0b
 ++	struct trapframe *tf;
 ++	struct addrspace *as;
 ++	struct semaphore *sem;
+++	int *pid;
 ++};
 ++
 ++int sys_fork(struct trapframe *ptf, pid_t *pid)
@@ -3861,16 +3916,17 @@ index 0000000..450fa0b
 ++	msg->as = childas;
 ++	msg->tf= ptf;
 ++	msg->sem = s;
+++	msg->pid = kmalloc(sizeof(int));
 ++	struct thread* child=NULL;
 ++	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 ++	P(s);
-++
+++	*pid = *(msg->pid);
 ++	kfree(msg->sem);
+++	kfree(msg->pid);
 ++	kfree(msg);
 ++
 ++	if(err)
 ++		return err;
-++	*pid = child->pid;
 ++	return 0;
 ++}
 ++
@@ -3911,8 +3967,29 @@ index 0000000..450fa0b
 ++    EFAULT		One of the args is an invalid pointer.
 ++ */
 ++
-++int sys_execv(userptr_t program, userptr_t argsptr)
+++int sys_execv(userptr_t prog, userptr_t argsptr)
 ++{
+++	char *program = kmalloc(1000);
+++	size_t proglen;
+++
+++	int err = copyin(argsptr, program,1); // doing this just to make sure its valid address
+++	if(err)
+++	{
+++			kfree(program);
+++			return EFAULT;
+++	}
+++
+++	err = copyinstr(prog, program, 1000, &proglen);
+++	if(err)
+++	{
+++			kfree(program);
+++			return EFAULT;
+++	}
+++	if(err)
+++	{
+++		kfree(program);
+++		return EFAULT;
+++	}
 ++	char** args=(char**)argsptr;
 ++	struct vnode *v;
 ++	vaddr_t entrypoint, stackptr;
@@ -3928,7 +4005,12 @@ index 0000000..450fa0b
 ++
 ++	while(args[j]!=NULL){
 ++		//strlen = kstrcpy(args[j], tempArgs);//
-++		copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
+++		err = copyinstr((userptr_t)(args[j]), tempArgs, 1000,&strlen);
+++		if(err)
+++		{
+++			kfree(tempArgs);
+++			return EFAULT;
+++		}
 ++		strlen=strlen + 4 - strlen%4;
 ++		size+=strlen;
 ++		j++;
@@ -3994,6 +4076,7 @@ index 0000000..450fa0b
 ++	copyout(kargv, (userptr_t)userAddr, (size_t)size);
 ++	//Copied to user space
 ++	kfree(tempArgs);
+++	kfree(kargv);
 ++	/* Warp to user mode. */
 ++	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
 ++
@@ -4053,11 +4136,10 @@ index 0000000..450fa0b
 ++    ESRCH		The pid argument named a nonexistent process.
 ++    EFAULT		The status argument was an invalid pointer.
 ++ */
-++int sys_waitpid(pid_t pid, int *status, int options, int *retval)
+++int sys_waitpid(pid_t pid, userptr_t status, int options, int *retval, int iskernspace)
 ++{
 ++	if(options!=0)
 ++		return EINVAL;
-++
 ++
 ++	//if waitOnThread==NULL or exitSemaphore[i]==NULL(Thread exited or does not exist)
 ++	//then exitCode[i]==-1 thread does not exist or exit code collected
@@ -4069,30 +4151,48 @@ index 0000000..450fa0b
 ++	//As described under _exit(), precisely what is meant by "interested" is up to you...Decide on this
 ++	//TO allow only parents to wait on child, check if current threads Pid is PPID of the child thread. But this wont work with already exited thread.
 ++	//Status yet to understand
+++	int exit = 0;
+++	if(iskernspace == 0)//copysomevalue to check if its valid
+++	{
+++		int err = copyout(&exit, status, sizeof(int));
+++		if(err)
+++			return err;
+++	}
 ++
-++	//Do i need to cast pID to int??
-++	if(status==NULL){
-++		return EFAULT;
-++	}else if(g_pidlist[pid]==NULL){
+++
+++	if(pid<PID_MIN || pid > PID_MAX)
+++		return ESRCH;
+++	if(g_pidlist[pid]==NULL){
 ++		//The pid argument named a nonexistent process.
 ++		return ESRCH;
-++
-++	}else {
-++		//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
-++		//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
-++		struct thread* waitOnThread=g_pidlist[pid]->thread;
-++
-++		//TODO: need to add PPID to pidentry struct only parent should be able to collect
-++		if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
-++			return ECHILD;
-++		P(g_pidlist[pid]->sem);
-++		*status=g_pidlist[pid]->exitstatus;
-++		sem_destroy(g_pidlist[pid]->sem);
-++		kfree(g_pidlist[pid]);
-++		g_pidlist[pid]=NULL;
-++		*retval=pid;
-++		return 0;
 ++	}
+++	//Child Thread is still executing. Do a P() on the corresponding Semaphore.P will return immediately for a Zombie thread.
+++	//We will allow only parent to collect exitcode of child. This defines what "Interested" means and will also ensure that there is no deadlock
+++	struct thread* waitOnThread=g_pidlist[pid]->thread;
+++
+++	//TODO: need to add PPID to pidentry struct only parent should be able to collect
+++	if(waitOnThread!=NULL && curthread->pid!=waitOnThread->ppid)
+++		return ECHILD;
+++	P(g_pidlist[pid]->sem);
+++
+++	exit = _MKWAIT_EXIT(g_pidlist[pid]->exitstatus);
+++		if(iskernspace == 1)
+++		{
+++			*((int*)status) = g_pidlist[pid]->exitstatus;
+++		}
+++		else
+++		{
+++			int err = copyout(&exit, status, sizeof(int));
+++			if(err)
+++				return err;
+++		}
+++
+++	sem_destroy(g_pidlist[pid]->sem);
+++	kfree(g_pidlist[pid]);
+++	g_pidlist[pid]=NULL;
+++	*retval=pid;
+++	return 0;
+++
 ++}
 ++
 ++/*
@@ -4114,7 +4214,7 @@ index 0000000..450fa0b
 ++void sys_exit(int exitcode)
 ++{
 ++	int pid=curthread->pid;
-++	g_pidlist[pid]->exitstatus=exitcode;
+++	g_pidlist[pid]->exitstatus=exitcode;//_MKWAIT_EXIT(exitcode);
 ++	g_pidlist[pid]->thread = NULL;
 ++	V(g_pidlist[pid]->sem);
 ++	thread_exit();
@@ -4130,7 +4230,7 @@ index 0000000..450fa0b
 ++	curthread->t_addrspace = as;
 ++	as_activate(curthread->t_addrspace);
 ++
-++
+++	*(msg->pid) = curthread->pid;
 ++	struct trapframe tf;
 ++	clonetrapframe(ptf, &tf);
 ++
@@ -4894,7 +4994,135 @@ index 0000000..450fa0b
 + 	switch (newstate) {
 +-	    case S_RUN:
 ++	case S_RUN:
++ 		panic("Illegal S_RUN in thread_switch\n");
++ 		break;
++-	    case S_READY:
+++	case S_READY:
++ 		thread_make_runnable(cur, true /*have lock*/);
++ 		break;
++-	    case S_SLEEP:
+++	case S_SLEEP:
++ 		cur->t_wchan_name = wc->wc_name;
++ 		/*
++ 		 * Add the thread to the list in the wait channel, and
++@@ -611,7 +636,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
++ 		threadlist_addtail(&wc->wc_threads, cur);
++ 		wchan_unlock(wc);
++ 		break;
++-	    case S_ZOMBIE:
+++	case S_ZOMBIE:
++ 		cur->t_wchan_name = "ZOMBIE";
++ 		threadlist_addtail(&curcpu->c_zombies, cur);
++ 		break;
++@@ -736,7 +761,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
++  */
++ void
++ thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
++-	       void *data1, unsigned long data2)
+++		void *data1, unsigned long data2)
++ {
++ 	struct thread *cur;
++ 
++@@ -817,8 +842,9 @@ thread_exit(void)
++ 	/* Check the stack guard band. */
++ 	thread_checkstack(cur);
++ 
+++
++ 	/* Interrupts off on this processor */
++-        splhigh();
+++	splhigh();
++ 	thread_switch(S_ZOMBIE, NULL);
++ 	panic("The zombie walks!\n");
++ }
++@@ -845,14 +871,14 @@ thread_yield(void)
++ void
++ schedule(void)
++ {
++-  // 28 Feb 2012 : GWA : Leave the default scheduler alone!
+++	// 28 Feb 2012 : GWA : Leave the default scheduler alone!
++ }
++ #else
++ void
++ schedule(void)
++ {
++-  // 28 Feb 2012 : GWA : Implement your scheduler that prioritizes
++-  // "interactive" threads here.
+++	// 28 Feb 2012 : GWA : Implement your scheduler that prioritizes
+++	// "interactive" threads here.
++ }
++ #endif
++ 
++@@ -947,8 +973,8 @@ thread_consider_migration(void)
++ 			t->t_cpu = c;
++ 			threadlist_addtail(&c->c_runqueue, t);
++ 			DEBUG(DB_THREADS,
++-			      "Migrated thread %s: cpu %u -> %u",
++-			      t->t_name, curcpu->c_number, c->c_number);
+++					"Migrated thread %s: cpu %u -> %u",
+++					t->t_name, curcpu->c_number, c->c_number);
++ 			to_send--;
++ 			if (c->c_isidle) {
++ 				/*
++@@ -1201,7 +1227,7 @@ interprocessor_interrupt(void)
++ 		spinlock_acquire(&curcpu->c_runqueue_lock);
++ 		if (!curcpu->c_isidle) {
++ 			kprintf("cpu%d: offline: warning: not idle\n",
++-				curcpu->c_number);
+++					curcpu->c_number);
++ 		}
++ 		spinlock_release(&curcpu->c_runqueue_lock);
++ 		kprintf("cpu%d: offline.\n", curcpu->c_number);
++@@ -1228,3 +1254,5 @@ interprocessor_interrupt(void)
++ 	curcpu->c_ipi_pending = 0;
++ 	spinlock_release(&curcpu->c_ipi_lock);
++ }
+++
+++
++diff --git a/kern/vfs/vfspath.c b/kern/vfs/vfspath.c
++index 3e439c6..2ae3507 100644
++--- a/kern/vfs/vfspath.c
+++++ b/kern/vfs/vfspath.c
++@@ -249,6 +249,34 @@ vfs_symlink(const char *contents, char *path)
++ 	return result;
++ }
++ 
+++int vfs_read(struct vnode *vn, struct uio *uio)
+++{
+++		int result;
+++		result = VOP_READ(vn, uio);
+++
+++//		VOP_DECREF(vn);
+++
+++		return result;
+++}
+++
+++int vfs_write(struct vnode *vn, struct uio *uio)
+++{
+++		int result;
+++		result = VOP_WRITE(vn, uio);
+++
+++		//VOP_DECREF(vn);
+++
+++		return result;
+++}
+++
+++off_t vfs_lseek(struct vnode *vn, off_t pos)
+++{
+++	int res
 \ No newline at end of file
+diff --git a/user/testbin/badcall/bad_execv.c b/user/testbin/badcall/bad_execv.c
+index 287a678..c0a6588 100644
+--- a/user/testbin/badcall/bad_execv.c
++++ b/user/testbin/badcall/bad_execv.c
+@@ -63,7 +63,7 @@ exec_common_fork(void)
+ 		return -1;
+ 	}
+ 	if (!WIFEXITED(status) || WEXITSTATUS(status) != MAGIC_STATUS) {
+-		warnx("FAILURE: wrong exit code of subprocess");
++		warnx("FAILURE: wrong exit code of subprocess %d, %d, %d", status, WIFEXITED(status), WEXITSTATUS(status));
+ 	}
+ 	return 1;
+ }
 diff --git a/user/testbin/forktest/forktest.c b/user/testbin/forktest/forktest.c
 index 50d72b0..c8599a6 100644
 --- a/user/testbin/forktest/forktest.c
