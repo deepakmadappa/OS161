@@ -146,7 +146,7 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 	msg->sem = s;
 	msg->pid = kmalloc(sizeof(int));
 	if(msg->pid == NULL)
-		KASSERT("malloc failed");
+		return ENOMEM;
 	struct thread* child=NULL;
 	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 	if(err)
@@ -488,7 +488,7 @@ int createpid(struct thread* newthread, pid_t *ret)
 		{
 			struct pidentry *pident = kmalloc(sizeof(struct pidentry));
 			if(pident == NULL)
-				KASSERT("malloc failed");
+				return ENOMEM;
 			pident->exitstatus = 0;
 			pident->thread = newthread;
 			pident->sem = sem_create("threadsem", 0);
