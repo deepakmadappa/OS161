@@ -1200,10 +1200,10 @@ index 0000000..b323c82
 +}
 diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 new file mode 100644
-index 0000000..85d19e7
+index 0000000..2aad606
 --- /dev/null
 +++ b/kern/syscall/proc_syscalls.c
-@@ -0,0 +1,493 @@
+@@ -0,0 +1,500 @@
 +#include <types.h>
 +#include <syscall.h>
 +#include <kern/errno.h>
@@ -1342,12 +1342,17 @@ index 0000000..85d19e7
 +	if(err)
 +		return err;
 +	struct message* msg = kmalloc(sizeof(struct message));
-+
++	if(msg == NULL)
++		KASSERT("malloc failed");
 +	struct semaphore* s = sem_create("forksem",0);
++	if(s == NULL)
++		KASSERT("Create Semaphore failed");
 +	msg->as = childas;
 +	msg->tf= ptf;
 +	msg->sem = s;
 +	msg->pid = kmalloc(sizeof(int));
++	if(msg->pid == NULL)
++		KASSERT("malloc failed");
 +	struct thread* child=NULL;
 +	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 +	P(s);
@@ -1686,6 +1691,8 @@ index 0000000..85d19e7
 +		if(g_pidlist[i] == NULL)
 +		{
 +			struct pidentry *pident = kmalloc(sizeof(struct pidentry));
++			if(pident == NULL)
++				KASSERT("malloc failed");
 +			pident->exitstatus = 0;
 +			pident->thread = newthread;
 +			pident->sem = sem_create("threadsem", 0);
@@ -2563,10 +2570,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..20d5bcd
+index 0000000..b211a30
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,2549 @@
+@@ -0,0 +1,2540 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -3769,10 +3776,10 @@ index 0000000..20d5bcd
 ++}
 +diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 +new file mode 100644
-+index 0000000..85d19e7
++index 0000000..2aad606
 +--- /dev/null
 ++++ b/kern/syscall/proc_syscalls.c
-+@@ -0,0 +1,493 @@
++@@ -0,0 +1,500 @@
 ++#include <types.h>
 ++#include <syscall.h>
 ++#include <kern/errno.h>
@@ -3911,12 +3918,17 @@ index 0000000..20d5bcd
 ++	if(err)
 ++		return err;
 ++	struct message* msg = kmalloc(sizeof(struct message));
-++
+++	if(msg == NULL)
+++		KASSERT("malloc failed");
 ++	struct semaphore* s = sem_create("forksem",0);
+++	if(s == NULL)
+++		KASSERT("Create Semaphore failed");
 ++	msg->as = childas;
 ++	msg->tf= ptf;
 ++	msg->sem = s;
 ++	msg->pid = kmalloc(sizeof(int));
+++	if(msg->pid == NULL)
+++		KASSERT("malloc failed");
 ++	struct thread* child=NULL;
 ++	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 ++	P(s);
@@ -4255,6 +4267,8 @@ index 0000000..20d5bcd
 ++		if(g_pidlist[i] == NULL)
 ++		{
 ++			struct pidentry *pident = kmalloc(sizeof(struct pidentry));
+++			if(pident == NULL)
+++				KASSERT("malloc failed");
 ++			pident->exitstatus = 0;
 ++			pident->thread = newthread;
 ++			pident->sem = sem_create("threadsem", 0);
@@ -5099,23 +5113,7 @@ index 0000000..20d5bcd
 ++int vfs_write(struct vnode *vn, struct uio *uio)
 ++{
 ++		int result;
-++		result = VOP_WRITE(vn, uio);
-++
-++		//VOP_DECREF(vn);
-++
-++		return result;
-++}
-++
-++off_t vfs_lseek(struct vnode *vn, off_t pos)
-++{
-++	int result;
-++	result = VOP_TRYSEEK(vn, pos);
-++
-++	return result;
-++}
-++
-+ /*
-+  * Does mo
+++		result
 \ No newline at end of file
 diff --git a/user/testbin/badcall/bad_execv.c b/user/testbin/badcall/bad_execv.c
 index 287a678..c0a6588 100644
