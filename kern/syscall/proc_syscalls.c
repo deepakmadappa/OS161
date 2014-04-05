@@ -140,7 +140,7 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 		return ENOMEM;
 	struct semaphore* s = sem_create("forksem",0);
 	if(s == NULL)
-		ENOMEM;
+		return ENOMEM;
 	msg->as = childas;
 	msg->tf= ptf;
 	msg->sem = s;
