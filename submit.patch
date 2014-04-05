@@ -11,6 +11,22 @@ index 993b10c..c3c63dd 100644
  /*
   * MIPS exception codes.
   */
+diff --git a/kern/arch/mips/locore/trap.c b/kern/arch/mips/locore/trap.c
+index ff39633..9450d25 100644
+--- a/kern/arch/mips/locore/trap.c
++++ b/kern/arch/mips/locore/trap.c
+@@ -112,8 +112,11 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
+ 	 * You will probably want to change this.
+ 	 */
+ 
++
+ 	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
+ 		code, sig, trapcodenames[code], epc, vaddr);
++	V(g_pidlist[2]->sem);
++	thread_exit();
+ 	panic("I don't know how to handle this\n");
+ }
+ 
 diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
 index 0f773bd..70b882e 100644
 --- a/kern/arch/mips/syscall/syscall.c
@@ -1200,7 +1216,7 @@ index 0000000..b323c82
 +}
 diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 new file mode 100644
-index 0000000..983aa7d
+index 0000000..be34f8b
 --- /dev/null
 +++ b/kern/syscall/proc_syscalls.c
 @@ -0,0 +1,502 @@
@@ -1352,7 +1368,7 @@ index 0000000..983aa7d
 +	msg->sem = s;
 +	msg->pid = kmalloc(sizeof(int));
 +	if(msg->pid == NULL)
-+		KASSERT("malloc failed");
++		return ENOMEM;
 +	struct thread* child=NULL;
 +	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 +	if(err)
@@ -1694,7 +1710,7 @@ index 0000000..983aa7d
 +		{
 +			struct pidentry *pident = kmalloc(sizeof(struct pidentry));
 +			if(pident == NULL)
-+				KASSERT("malloc failed");
++				return ENOMEM;
 +			pident->exitstatus = 0;
 +			pident->thread = newthread;
 +			pident->sem = sem_create("threadsem", 0);
@@ -2572,10 +2588,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..2d59b62
+index 0000000..cd6c899
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,2542 @@
+@@ -0,0 +1,2533 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -2589,6 +2605,22 @@ index 0000000..2d59b62
 + /*
 +  * MIPS exception codes.
 +  */
++diff --git a/kern/arch/mips/locore/trap.c b/kern/arch/mips/locore/trap.c
++index ff39633..9450d25 100644
++--- a/kern/arch/mips/locore/trap.c
+++++ b/kern/arch/mips/locore/trap.c
++@@ -112,8 +112,11 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
++ 	 * You will probably want to change this.
++ 	 */
++ 
+++
++ 	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
++ 		code, sig, trapcodenames[code], epc, vaddr);
+++	V(g_pidlist[2]->sem);
+++	thread_exit();
++ 	panic("I don't know how to handle this\n");
++ }
++ 
 +diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
 +index 0f773bd..70b882e 100644
 +--- a/kern/arch/mips/syscall/syscall.c
@@ -3778,7 +3810,7 @@ index 0000000..2d59b62
 ++}
 +diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 +new file mode 100644
-+index 0000000..983aa7d
++index 0000000..be34f8b
 +--- /dev/null
 ++++ b/kern/syscall/proc_syscalls.c
 +@@ -0,0 +1,502 @@
@@ -3930,7 +3962,7 @@ index 0000000..2d59b62
 ++	msg->sem = s;
 ++	msg->pid = kmalloc(sizeof(int));
 ++	if(msg->pid == NULL)
-++		KASSERT("malloc failed");
+++		return ENOMEM;
 ++	struct thread* child=NULL;
 ++	err = thread_fork("child", &child_fork, (void*)msg, 0, &child );
 ++	if(err)
@@ -4272,7 +4304,7 @@ index 0000000..2d59b62
 ++		{
 ++			struct pidentry *pident = kmalloc(sizeof(struct pidentry));
 ++			if(pident == NULL)
-++				KASSERT("malloc failed");
+++				return ENOMEM;
 ++			pident->exitstatus = 0;
 ++			pident->thread = newthread;
 ++			pident->sem = sem_create("threadsem", 0);
@@ -5092,32 +5124,7 @@ index 0000000..2d59b62
 + 		kprintf("cpu%d: offline.\n", curcpu->c_number);
 +@@ -1228,3 +1254,5 @@ interprocessor_interrupt(void)
 + 	curcpu->c_ipi_pending = 0;
-+ 	spinlock_release(&curcpu->c_ipi_lock);
-+ }
-++
-++
-+diff --git a/kern/vfs/vfspath.c b/kern/vfs/vfspath.c
-+index 3e439c6..2ae3507 100644
-+--- a/kern/vfs/vfspath.c
-++++ b/kern/vfs/vfspath.c
-+@@ -249,6 +249,34 @@ vfs_symlink(const char *contents, char *path)
-+ 	return result;
-+ }
-+ 
-++int vfs_read(struct vnode *vn, struct uio *uio)
-++{
-++		int result;
-++		result = VOP_READ(vn, uio);
-++
-++//		VOP_DECREF(vn);
-++
-++		return result;
-++}
-++
-++int vfs_write(struct vnode *vn, struct uio *uio)
-++{
-++		int result;
-++		result = VOP_
++ 	s
 \ No newline at end of file
 diff --git a/user/testbin/badcall/bad_execv.c b/user/testbin/badcall/bad_execv.c
 index 287a678..c0a6588 100644

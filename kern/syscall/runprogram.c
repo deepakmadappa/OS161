@@ -165,6 +165,7 @@ runprogram(char *progname,char** args, unsigned long nargs)
 	fh->open_mode = O_RDONLY;
 	fh->lk_fileaccess = lock_create("filelock");
 	fh->refcount = 0;
+	fh->isSeekable = 0;
 
 	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
 	curthread->filetable[0] = fh;
@@ -181,7 +182,7 @@ runprogram(char *progname,char** args, unsigned long nargs)
 	fh->open_mode = O_WRONLY;
 	fh->lk_fileaccess = lock_create("filelock");
 	fh->refcount = 0;
-
+	fh->isSeekable = 0;
 
 	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
 	curthread->filetable[1] = fh;
@@ -198,7 +199,7 @@ runprogram(char *progname,char** args, unsigned long nargs)
 	fh->open_mode = O_WRONLY;
 	fh->lk_fileaccess = lock_create("filelock");
 	fh->refcount = 0;
-
+	fh->isSeekable = 0;
 
 	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
 	curthread->filetable[2] = fh;

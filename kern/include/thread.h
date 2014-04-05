@@ -130,6 +130,7 @@ struct filehandle
 	struct vnode *fileobject;
 	struct lock* lk_fileaccess;
 	int refcount;
+	int isSeekable;
 };
 
 struct pidentry

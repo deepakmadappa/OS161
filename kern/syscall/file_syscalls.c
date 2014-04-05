@@ -94,6 +94,7 @@ int sys_open(userptr_t filename, int flags, int32_t *fd, ...)
 	fh->open_mode = flags;
 	fh->lk_fileaccess = lock_create("filelock");
 	fh->refcount = 1;
+	fh->isSeekable = 1;
 
 	// *fd = addtofiletable(fh);	we'll set fd once we implement filetable;
 	cthread->filetable[*fd] = fh;
@@ -243,11 +244,10 @@ int sys_lseek(int fd, off_t pos, int sp, int32_t *offsethigh, int32_t *offsetlow
 {
 	if(fd<0||fd>=OPEN_MAX)
 		return EBADF;
-	if(fd<3)
-		return ESPIPE;
 	int whence;
 	int err = copyin((userptr_t)sp+16, &whence, sizeof(int32_t));
-
+	if(err)
+		return err;
 	if(whence <0 || whence >2)
 		return EINVAL;
 	struct filehandle* fh;
@@ -255,6 +255,8 @@ int sys_lseek(int fd, off_t pos, int sp, int32_t *offsethigh, int32_t *offsetlow
 	fh = cur->filetable[fd];
 	if(fh == NULL )
 		return EBADF;
+	if(fh->isSeekable != 1)
+			return ESPIPE;
 	lock_acquire(fh->lk_fileaccess);
 	off_t newpos;
 	if(whence == SEEK_SET)
@@ -363,6 +365,7 @@ int sys_dup2(int oldfd, int newfd, int * retval)
 	            sys_close(newfd);
 	        }
 		cur->filetable[newfd] = cur->filetable[oldfd];
+		cur->filetable[newfd]->refcount++;
 		*retval=newfd;
 		return 0;
 	}
