@@ -248,11 +248,11 @@ runprogram(char *progname,char** args, unsigned long nargs)
 	char* copyinstack = kmalloc(size);
 	copyin((userptr_t)userAddr,(void *)copyinstack,(size_t)size);
 
-	int k=0;
-	for(k=0;k<size;k++)
-	{
-		kprintf("%c", copyinstack[i]);
-	}
+	//int k=0;
+	//for(k=0;k<size;k++)
+	//{
+	//	kprintf("%c", copyinstack[i]);
+	//}
 	//while(1);
 	/* Warp to user mode. */
 	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
