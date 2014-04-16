@@ -125,14 +125,14 @@ struct tlbshootdown {
 
 #define TLBSHOOTDOWN_MAX 16
 
-struct page
+struct memorypage
 {
-    struct addrspace* as;
-    vaddr_t va;
+    paddr_t pa;
 
     /* page state */
     page_state_t state;
 
+    uint64_t numallocations;
     uint64_t timestamp;
 
     //add more stuff here
@@ -140,12 +140,16 @@ struct page
 
 struct struct_coremap
 {
-	struct page *pages;
+	struct memorypage *physicalpages;
 	struct lock *lkcore;
 	paddr_t freeaddr;
 	paddr_t firstaddr;
 	paddr_t lastaddr;
 	uint32_t numpages;
+	bool bisbootstrapdone;
 }g_coremap;
+
+static paddr_t getppages(unsigned long npages);
+
 
 #endif /* _MIPS_VM_H_ */

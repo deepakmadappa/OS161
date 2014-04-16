@@ -38,7 +38,7 @@
 #include <addrspace.h>
 #include <vm.h>
 
-
+static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
 void
 vm_bootstrap(void)
@@ -48,23 +48,23 @@ vm_bootstrap(void)
 	paddr_t firstaddr, lastaddr;
 	ram_getsize(&firstaddr, &lastaddr);
 	g_coremap.numpages = ROUNDDOWN(lastaddr, PAGE_SIZE) / PAGE_SIZE;
-	g_coremap.pages = (struct page*) PADDR_TO_KVADDR(firstaddr);
+	g_coremap.physicalpages = (struct page*) PADDR_TO_KVADDR(firstaddr);
 	g_coremap.freeaddr = firstaddr + g_coremap.numpages * sizeof(struct page);
 	g_coremap.firstaddr = firstaddr;
 	g_coremap.lastaddr = lastaddr;
 
 	int pad = (g_coremap.freeaddr % PAGE_SIZE) == 0 ? 0:1;
-	int ncpages = g_coremap.freeaddr/PAGE_SIZE + pad;
-	int i = 0;
+	uint32_t ncpages = g_coremap.freeaddr/PAGE_SIZE + pad;
+	uint32_t i = 0;
 	for(i = 0; i< ncpages; i++)
 	{
-		g_coremap.pages[i].state = PAGE_FIXED;
+		g_coremap.physicalpages[i].state = PAGE_FIXED;
 	}
 	for(;i<g_coremap.numpages;i++)
 	{
-		g_coremap.pages[i].state = PAGE_FREE;
+		g_coremap.physicalpages[i].state = PAGE_FREE;
 	}
-
+	g_coremap.bisbootstrapdone = true;
 
 
 	//TODO set flag for alloc kpages
@@ -73,7 +73,7 @@ vm_bootstrap(void)
 	//core_map =(struct page*) kmalloc(npages * sizeof(struct page));
 }
 
-/*static
+static
 paddr_t
 getppages(unsigned long npages)
 {
@@ -85,28 +85,102 @@ getppages(unsigned long npages)
 
 	spinlock_release(&stealmem_lock);
 	return addr;
-}*/
+}
 
 /* Allocate/free some kernel-space virtual pages */
-vaddr_t
+paddr_t
 alloc_kpages(int npages)
 {
-	(void)npages;
-	return 0;
-/*	paddr_t pa;
-	pa = getppages(npages);
-	if (pa==0) {
-		return 0;
+	lock_acquire(g_coremap.lkcore);
+	if(g_coremap.bisbootstrapdone != true)
+	{
+		paddr_t pa;
+		pa = getppages(npages);
+		if (pa==0) {
+			return 0;
+		}
+		return PADDR_TO_KVADDR(pa);
 	}
-	return PADDR_TO_KVADDR(pa);*/
+	else
+	{
+		//allocate from coremap
+		if(npages == 1)
+		{
+			return allocate_page();
+		}
+		else
+		{
+			return allocate_multiplepages(npages);
+		}
+	}
+	lock_release(g_coremap.lkcore);
+}
+
+paddr_t allocate_page()
+{
+
+	for(uint32_t i=0;i<g_coremap.numpages;i++)
+	{
+		if( g_coremap.physicalpages[i].state == PAGE_FREE)
+		{
+			g_coremap.physicalpages[i].numallocations = 1;
+			g_coremap.physicalpages[i].state = PAGE_FIXED;
+			return g_coremap.physicalpages[i].pa;
+		}
+	}
+	panic("there is no free page");
+	//TODO: need to evict here
+	return NULL;
+}
+
+paddr_t allocate_multiplepages(int npages)
+{
+
+	uint32_t i=0;
+	int count = 0;
+	while(i< g_coremap.numpages - npages)
+	{
+		if(g_coremap.physicalpages[i].state == PAGE_FREE)
+		{
+			count++;
+		}
+		else
+		{
+			count = 0;
+		}
+		if(count == npages)
+			break;
+		i++;
+	}
+	if(count == npages)
+	{
+		for(int j = i - npages + 1; j <= i ; j++)
+		{
+			g_coremap.physicalpages[i].state = PAGE_FIXED;
+		}
+	}
+	else
+	{
+		panic("insufficient contiguous pages");
+		//TODO:Need to call evict here and make enuf room
+	}
+	g_coremap.physicalpages[i-npages +1].numallocations = npages;
+	return g_coremap.physicalpages[i-npages +1].pa;
 }
 
 void
-free_kpages(vaddr_t addr)
+free_kpages(paddr_t addr)
 {
-	/* nothing - leak the memory. */
+	lock_acquire(g_coremap.lkcore);
 
-	(void)addr;
+	int startindex = (addr - g_coremap.firstaddr)/PAGE_SIZE;
+	KASSERT(startindex + g_coremap.physicalpages[startindex].numallocations < g_coremap.numpages);
+	for(int i=startindex; i< startindex + g_coremap.physicalpages[startindex].numallocations; i++ )
+	{
+		KASSERT(g_coremap.physicalpages[i].state != PAGE_FREE);
+		g_coremap.physicalpages[i].state = PAGE_FREE;
+	}
+	lock_release(g_coremap.lkcore);
 }
 
 
@@ -128,7 +202,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 {
 	(void)faulttype; (void)faultaddress;
 	return 0;
-/*
+	/*
 	vaddr_t vbase1, vtop1, vbase2, vtop2, stackbase, stacktop;
 	paddr_t paddr;
 	int i;
@@ -154,9 +228,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	as = curthread->t_addrspace;
 	if (as == NULL) {
 
-		 * No address space set up. This is probably a kernel
-		 * fault early in boot. Return EFAULT so as to panic
-		 * instead of getting into an infinite faulting loop.
+	 * No address space set up. This is probably a kernel
+	 * fault early in boot. Return EFAULT so as to panic
+	 * instead of getting into an infinite faulting loop.
 
 		return EFAULT;
 	}
@@ -217,5 +291,5 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
 	splx(spl);
 	return EFAULT;
-*/
+	 */
 }
