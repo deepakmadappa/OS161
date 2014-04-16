@@ -30,7 +30,12 @@
 #ifndef _MIPS_VM_H_
 #define _MIPS_VM_H_
 
+typedef uint32_t page_state_t;
 
+#define PAGE_FREE 0
+#define PAGE_CLEAN 1
+#define PAGE_DIRTY 2
+#define PAGE_FIXED 3
 /*
  * Machine-dependent VM system definitions.
  */
@@ -67,6 +72,7 @@
  */
 #define PADDR_TO_KVADDR(paddr) ((paddr)+MIPS_KSEG0)
 
+#define ROUNDDOWN(X,Y) ( (X/Y) * Y)
 /*
  * The top of user space. (Actually, the address immediately above the
  * last valid user address.)
@@ -116,7 +122,30 @@ struct tlbshootdown {
 	vaddr_t ts_vaddr;
 };
 
+
 #define TLBSHOOTDOWN_MAX 16
 
+struct page
+{
+    struct addrspace* as;
+    vaddr_t va;
+
+    /* page state */
+    page_state_t state;
+
+    uint64_t timestamp;
+
+    //add more stuff here
+};
+
+struct struct_coremap
+{
+	struct page *pages;
+	struct lock *lkcore;
+	paddr_t freeaddr;
+	paddr_t firstaddr;
+	paddr_t lastaddr;
+	uint32_t numpages;
+}g_coremap;
 
 #endif /* _MIPS_VM_H_ */
