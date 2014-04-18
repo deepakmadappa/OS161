@@ -72,6 +72,8 @@ typedef uint32_t page_state_t;
  */
 #define PADDR_TO_KVADDR(paddr) ((paddr)+MIPS_KSEG0)
 
+#define KVADDR_TO_PADDR(vaddr) ((vaddr)-MIPS_KSEG0)
+
 #define ROUNDDOWN(X,Y) ( (X/Y) * Y)
 /*
  * The top of user space. (Actually, the address immediately above the
@@ -125,6 +127,10 @@ struct tlbshootdown {
 
 #define TLBSHOOTDOWN_MAX 16
 
+paddr_t allocate_onepage(void);
+paddr_t allocate_multiplepages(int npages);
+
+
 struct memorypage
 {
     paddr_t pa;
@@ -137,11 +143,10 @@ struct memorypage
 
     //add more stuff here
 };
-
+//static struct spinlock spinlkcore;
 struct struct_coremap
 {
 	struct memorypage *physicalpages;
-	struct lock *lkcore;
 	paddr_t freeaddr;
 	paddr_t firstaddr;
 	paddr_t lastaddr;
@@ -149,7 +154,8 @@ struct struct_coremap
 	bool bisbootstrapdone;
 }g_coremap;
 
-static paddr_t getppages(unsigned long npages);
+//static paddr_t getppages(unsigned long npages);
+
 
 
 #endif /* _MIPS_VM_H_ */

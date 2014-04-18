@@ -39,17 +39,16 @@
 #include <vm.h>
 
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+static struct spinlock spinlkcore =  SPINLOCK_INITIALIZER;;
 
 void
 vm_bootstrap(void)
 {
-	g_coremap.lkcore = lock_create("corelock");
-	KASSERT(g_coremap.lkcore != NULL);
 	paddr_t firstaddr, lastaddr;
 	ram_getsize(&firstaddr, &lastaddr);
 	g_coremap.numpages = ROUNDDOWN(lastaddr, PAGE_SIZE) / PAGE_SIZE;
-	g_coremap.physicalpages = (struct page*) PADDR_TO_KVADDR(firstaddr);
-	g_coremap.freeaddr = firstaddr + g_coremap.numpages * sizeof(struct page);
+	g_coremap.physicalpages = (struct memorypage*) PADDR_TO_KVADDR(firstaddr);
+	g_coremap.freeaddr = firstaddr + g_coremap.numpages * sizeof(struct memorypage);
 	g_coremap.firstaddr = firstaddr;
 	g_coremap.lastaddr = lastaddr;
 
@@ -59,10 +58,12 @@ vm_bootstrap(void)
 	for(i = 0; i< ncpages; i++)
 	{
 		g_coremap.physicalpages[i].state = PAGE_FIXED;
+		g_coremap.physicalpages[i].pa = i * PAGE_SIZE;
 	}
 	for(;i<g_coremap.numpages;i++)
 	{
 		g_coremap.physicalpages[i].state = PAGE_FREE;
+		g_coremap.physicalpages[i].pa = i * PAGE_SIZE;
 	}
 	g_coremap.bisbootstrapdone = true;
 
@@ -88,10 +89,9 @@ getppages(unsigned long npages)
 }
 
 /* Allocate/free some kernel-space virtual pages */
-paddr_t
+vaddr_t
 alloc_kpages(int npages)
 {
-	lock_acquire(g_coremap.lkcore);
 	if(g_coremap.bisbootstrapdone != true)
 	{
 		paddr_t pa;
@@ -103,20 +103,25 @@ alloc_kpages(int npages)
 	}
 	else
 	{
-		//allocate from coremap
+		spinlock_acquire(&spinlkcore);
+		vaddr_t retaddress = 0;
+				//allocate from coremap
 		if(npages == 1)
 		{
-			return allocate_page();
+			retaddress = PADDR_TO_KVADDR(allocate_onepage());
 		}
 		else
 		{
-			return allocate_multiplepages(npages);
+			retaddress = PADDR_TO_KVADDR(allocate_multiplepages(npages));
 		}
+		spinlock_release(&spinlkcore);
+		return retaddress;
 	}
-	lock_release(g_coremap.lkcore);
+
+	return 0; //just to let it compile now
 }
 
-paddr_t allocate_page()
+paddr_t allocate_onepage(void)
 {
 
 	for(uint32_t i=0;i<g_coremap.numpages;i++)
@@ -130,7 +135,7 @@ paddr_t allocate_page()
 	}
 	panic("there is no free page");
 	//TODO: need to evict here
-	return NULL;
+	return 0;
 }
 
 paddr_t allocate_multiplepages(int npages)
@@ -149,14 +154,15 @@ paddr_t allocate_multiplepages(int npages)
 			count = 0;
 		}
 		if(count == npages)
-			break;
+			break; //found enough contiguous pages, so stop the search
 		i++;
 	}
 	if(count == npages)
 	{
-		for(int j = i - npages + 1; j <= i ; j++)
+		for(uint32_t j = i - npages + 1; j <= i ; j++)	// counter i would have stopped after npages of our start
 		{
-			g_coremap.physicalpages[i].state = PAGE_FIXED;
+			g_coremap.physicalpages[j].state = PAGE_FIXED;
+			g_coremap.physicalpages[j].numallocations = 0;//to indicate that this is part of multiple page allocation
 		}
 	}
 	else
@@ -169,20 +175,24 @@ paddr_t allocate_multiplepages(int npages)
 }
 
 void
-free_kpages(paddr_t addr)
+free_kpages(vaddr_t kaddr)
 {
-	lock_acquire(g_coremap.lkcore);
 
-	int startindex = (addr - g_coremap.firstaddr)/PAGE_SIZE;
+	if(g_coremap.bisbootstrapdone == false)
+		return ;// leak memory for memsteals
+
+	paddr_t addr = KVADDR_TO_PADDR(kaddr);
+	spinlock_acquire(&spinlkcore);
+
+	int startindex = addr/PAGE_SIZE;
 	KASSERT(startindex + g_coremap.physicalpages[startindex].numallocations < g_coremap.numpages);
-	for(int i=startindex; i< startindex + g_coremap.physicalpages[startindex].numallocations; i++ )
+	for(uint32_t i=startindex; i< startindex + g_coremap.physicalpages[startindex].numallocations; i++ )
 	{
 		KASSERT(g_coremap.physicalpages[i].state != PAGE_FREE);
 		g_coremap.physicalpages[i].state = PAGE_FREE;
 	}
-	lock_release(g_coremap.lkcore);
+	spinlock_release(&spinlkcore);
 }
-
 
 void
 vm_tlbshootdown_all(void)

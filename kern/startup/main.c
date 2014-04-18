@@ -105,6 +105,8 @@ boot(void)
 	kprintf("\n");
 
 	/* Early initialization. */
+	g_coremap.bisbootstrapdone = false;
+
 	ram_bootstrap();
 	thread_bootstrap();
 	hardclock_bootstrap();
