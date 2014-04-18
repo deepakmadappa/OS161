@@ -49,6 +49,10 @@ as_create(void)
 		return NULL;
 	}
 
+	for(int i=0;i<1024;i++){
+
+	}
+
 	/*
 	 * Initialize as needed.
 	 */
