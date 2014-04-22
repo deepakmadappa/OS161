@@ -59,11 +59,9 @@ struct addrspace {
 	paddr_t as_stackpbase;
 #else
 	/* Put stuff here for your VM system */
-	vaddr_t as_csbase,as_csend;
-	vaddr_t as_dsbase,as_dsend;
 	vaddr_t as_heapbase,as_heapend;
 	vaddr_t as_sttop;
-	struct virtual_page ** uberArray[1024];
+	struct virtualpage ** uberArray[NUM_UBERPAGES];
 
 #endif
 };
@@ -116,6 +114,7 @@ int               as_prepare_load(struct addrspace *as);
 int               as_complete_load(struct addrspace *as);
 int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 
+void as_init_uberarray_section(struct addrspace *as, int index);
 
 /*
  * Functions in loadelf.c

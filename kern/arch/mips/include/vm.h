@@ -75,6 +75,17 @@ typedef uint32_t page_state_t;
 #define KVADDR_TO_PADDR(vaddr) ((vaddr)-MIPS_KSEG0)
 
 #define ROUNDDOWN(X,Y) ( (X/Y) * Y)
+
+#define VADDR_TO_UBERINDEX(X) ( (int)(X>>22))
+
+#define VADDR_TO_SUBINDEX(X) ( (int)((X & 0x003FF000) >> 12) )
+
+#define BYTES_TO_PAGES(bytes) ( (bytes/PAGE_SIZE) + (bytes%PAGE_SIZE ==0)?0:1  )
+
+#define INDECES_TO_VADDR(uber, sub)	( uber << 22 | sub <<12)
+
+#define NUM_UBERPAGES 512
+#define NUM_SUBPAGES 1024
 /*
  * The top of user space. (Actually, the address immediately above the
  * last valid user address.)
@@ -129,7 +140,14 @@ struct tlbshootdown {
 
 paddr_t allocate_onepage(void);
 paddr_t allocate_multiplepages(int npages);
+int32_t allocate_userpage(void);
 
+struct virtualpage
+{
+	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
+	off_t swapfileoffset;
+	uint8_t permission;
+};
 
 struct memorypage
 {
@@ -143,6 +161,7 @@ struct memorypage
 
     //add more stuff here
 };
+
 //static struct spinlock spinlkcore;
 struct struct_coremap
 {

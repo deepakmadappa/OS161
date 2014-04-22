@@ -49,14 +49,12 @@ as_create(void)
 		return NULL;
 	}
 
-	for(int i=0;i<1024;i++){
-
+	for(int i=0;i<NUM_UBERPAGES;i++){
+		as->uberArray[i] = NULL;
 	}
 
-	/*
-	 * Initialize as needed.
-	 */
-
+	as->as_heapbase = 0;
+	as->as_heapend = 0;
 	return as;
 }
 
@@ -70,12 +68,35 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 		return ENOMEM;
 	}
 
-	/*
-	 * Write this.
-	 */
+	newas = kmalloc(sizeof(struct addrspace));
+	for(int i=0; i<NUM_UBERPAGES; i++)
+	{
+		if(old->uberArray[i] != NULL)
+		{
+			as_init_uberarray_section(newas, i);
+			for(int j=0; j<NUM_SUBPAGES; j++)
+			{
+				if(old->uberArray[i][j] != NULL)
+				{
+					//allocate user page
 
-	(void)old;
-	
+					newas->uberArray[i][j] = kmalloc(sizeof(struct virtualpage));
+					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
+					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
+					if(old->uberArray[i][j]->coremapindex != -1)
+					{
+						int32_t address = allocate_userpage();
+						if(address == -1)
+							KASSERT(!"User page allocation must not fail");
+						newas->uberArray[i][j]->coremapindex = address;
+						memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
+					}
+
+				}
+			}
+		}
+	}
+
 	*ret = newas;
 	return 0;
 }
@@ -86,7 +107,7 @@ as_destroy(struct addrspace *as)
 	/*
 	 * Clean up as needed.
 	 */
-	
+
 	kfree(as);
 }
 
@@ -112,39 +133,108 @@ as_activate(struct addrspace *as)
  */
 int
 as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
-		 int readable, int writeable, int executable)
+		int readable, int writeable, int executable)
 {
 	/*
 	 * Write this.
 	 */
+	int uberindex = VADDR_TO_UBERINDEX(vaddr);
+	int subindex = VADDR_TO_SUBINDEX(vaddr);
+	int permission = (readable << 2) & (writeable <<1) & (executable);
 
-	(void)as;
-	(void)vaddr;
-	(void)sz;
-	(void)readable;
-	(void)writeable;
-	(void)executable;
-	return EUNIMP;
+	/*if(as->uberArray[uberindex] == NULL)
+	{
+		as_init_uberarray_section(as, uberindex);
+		int subindex = VADDR_TO_SUBINDEX(vaddr);
+		int pages = BYTES_TO_PAGES(sz);
+		struct virtualpage * vpages = kmalloc(pages * sizeof(struct virtualpage));
+		for(int i=0; i< pages; i++)
+		{
+			as->uberArray[uberindex][subindex+i] = &(vpages[i]);
+			vpages[i].coremapindex = -1;
+			vpages[i].swapfileoffset = -1;
+			vpages[i].permission = (int8_t)permission;
+		}
+	}
+	else	//uberindex exists
+	{
+		int subindex = VADDR_TO_SUBINDEX(vaddr);
+		int pages = BYTES_TO_PAGES(sz);
+		for(int i=subindex; i< subindex + pages; i++)
+		{
+			if (as->uberArray[uberindex][i] != NULL)
+				return EFAULT;
+		}
+		struct virtualpage * vpages = kmalloc(pages * sizeof(struct virtualpage));
+		for(int i=0; i< pages; i++)
+		{
+			as->uberArray[uberindex][subindex+i] = &(vpages[i]);
+			vpages[i].coremapindex = -1;
+			vpages[i].swapfileoffset = -1;
+			vpages[i].permission = (int8_t)permission;
+		}
+	}*/
+
+	uint32_t numpages = (sz + (vaddr & 0xFFF)) / PAGE_SIZE;	// vaddr & 0xFFF is necessary because loadelf may define region from middle of page so if we compute just with size we may not allocate enough
+	//struct virtualpage * vpages = kmalloc(numpages * sizeof(struct virtualpage));
+	for(uint32_t i=0; i < numpages; i ++)
+	{
+		if(as->uberArray[uberindex] == NULL)
+		{
+			as_init_uberarray_section(as, uberindex);
+		}
+
+		if(as->uberArray[uberindex][subindex] !=NULL)
+		{
+			return EFAULT;	//address already in use
+		}
+		as->uberArray[uberindex][subindex] = kmalloc(sizeof(struct virtualpage));
+		as->uberArray[uberindex][subindex]->coremapindex = -1;
+		as->uberArray[uberindex][subindex]->swapfileoffset = -1;
+		as->uberArray[uberindex][subindex]->permission = (int8_t)permission;
+
+		subindex++;
+		if(subindex >= 1024)
+		{
+			subindex = 0;
+			uberindex++;
+		}
+	}
+
+	if(vaddr + sz > as->as_heapbase)
+	{
+		as->as_heapbase = INDECES_TO_VADDR(uberindex, subindex);
+		as->as_heapend = as->as_heapbase;
+	}
+	return 0;
 }
 
 int
 as_prepare_load(struct addrspace *as)
 {
-	/*
-	 * Write this.
-	 */
-
-	(void)as;
+	for(int i=0; i<1024; i++)
+	{
+		if(as->uberArray[i] != NULL)
+		{
+			for(int j=0; j<1024; j++)
+			{
+				if(as->uberArray[i][j] != NULL)
+				{
+					//allocate user page
+					int32_t address = allocate_userpage();
+					if(address == -1)
+						KASSERT(!"User page allocation must not fail");
+					as->uberArray[i][j]->coremapindex = address;
+				}
+			}
+		}
+	}
 	return 0;
 }
 
 int
 as_complete_load(struct addrspace *as)
 {
-	/*
-	 * Write this.
-	 */
-
 	(void)as;
 	return 0;
 }
@@ -160,7 +250,16 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 
 	/* Initial user-level stack pointer */
 	*stackptr = USERSTACK;
-	
+
+
 	return 0;
 }
 
+void as_init_uberarray_section(struct addrspace *as, int index)
+{
+	as->uberArray[index] =  (struct virtualpage **)kmalloc(1024 * sizeof(struct virtualpage*));
+	for(int i=0;i < 1024; i++)
+	{
+		as->uberArray[index][i] = NULL;
+	}
+}

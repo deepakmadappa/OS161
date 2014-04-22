@@ -105,7 +105,7 @@ alloc_kpages(int npages)
 	{
 		spinlock_acquire(&spinlkcore);
 		vaddr_t retaddress = 0;
-				//allocate from coremap
+		//allocate from coremap
 		if(npages == 1)
 		{
 			retaddress = PADDR_TO_KVADDR(allocate_onepage());
@@ -172,6 +172,27 @@ paddr_t allocate_multiplepages(int npages)
 	}
 	g_coremap.physicalpages[i-npages +1].numallocations = npages;
 	return g_coremap.physicalpages[i-npages +1].pa;
+}
+
+int32_t allocate_userpage(void)
+{
+	spinlock_acquire(&spinlkcore);
+	for(uint32_t i=0;i<g_coremap.numpages;i++)
+	{
+		if( g_coremap.physicalpages[i].state == PAGE_FREE)
+		{
+			g_coremap.physicalpages[i].numallocations = 1;
+			g_coremap.physicalpages[i].state = PAGE_DIRTY;
+			spinlock_release(&spinlkcore);
+			return (int32_t)i;
+		}
+	}
+	spinlock_release(&spinlkcore);
+
+	panic("there is no free page");
+	//TODO: need to evict here
+
+	return -1;
 }
 
 void
