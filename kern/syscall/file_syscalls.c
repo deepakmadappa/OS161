@@ -141,7 +141,11 @@ int sys_read(int fd, userptr_t buf, size_t buflen, int32_t *bytesread)
 
 	int err = vfs_read(fh->fileobject, &ku);
 	if(err)
+	{
+		lock_release(fh->lk_fileaccess);
 		return err;
+	}
+
 	*bytesread = buflen - ku.uio_resid;
 	if(*bytesread==0){
 		lock_release(fh->lk_fileaccess);
@@ -202,7 +206,10 @@ int sys_write(int fd, userptr_t buf, size_t nbytes, int32_t *byteswritten)
 	//ku.uio_space = cur->t_addrspace;
 	int err = vfs_write(fh->fileobject, &ku);
 	if(err)
+	{
+		lock_release(fh->lk_fileaccess);
 		return err;
+	}
 	*byteswritten = ku.uio_offset - fh->offset;
 	fh->offset += *byteswritten;
 	lock_release(fh->lk_fileaccess);
@@ -273,7 +280,10 @@ int sys_lseek(int fd, off_t pos, int sp, int32_t *offsethigh, int32_t *offsetlow
 	}
 	err =vfs_lseek(fh->fileobject, newpos + pos);
 	if(err)
+	{
+		lock_release(fh->lk_fileaccess);
 		return err;
+	}
 	fh->offset = newpos + pos;
 	// else whence is SEEK_CUR
 
@@ -305,6 +315,8 @@ int sys_close(int fd)
 {
 	if(fd<0||fd>=OPEN_MAX)
 		return EBADF;
+	if(fd < 3)
+		return 0;
 	struct filehandle* fh;
 	struct thread *cur = (struct thread*)curthread;
 	fh = cur->filetable[fd];

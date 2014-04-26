@@ -174,7 +174,7 @@ paddr_t allocate_multiplepages(int npages)
 	return g_coremap.physicalpages[i-npages +1].pa;
 }
 
-int32_t allocate_userpage(void)
+int32_t allocate_userpage(struct addrspace* as)
 {
 	spinlock_acquire(&spinlkcore);
 	for(uint32_t i=0;i<g_coremap.numpages;i++)
@@ -183,6 +183,7 @@ int32_t allocate_userpage(void)
 		{
 			g_coremap.physicalpages[i].numallocations = 1;
 			g_coremap.physicalpages[i].state = PAGE_DIRTY;
+			g_coremap.physicalpages[i].as = as;
 			spinlock_release(&spinlkcore);
 			return (int32_t)i;
 		}
@@ -211,6 +212,7 @@ free_kpages(vaddr_t kaddr)
 	{
 		KASSERT(g_coremap.physicalpages[i].state != PAGE_FREE);
 		g_coremap.physicalpages[i].state = PAGE_FREE;
+		g_coremap.physicalpages[i].as = NULL;
 	}
 	spinlock_release(&spinlkcore);
 }
@@ -231,10 +233,6 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
 int
 vm_fault(int faulttype, vaddr_t faultaddress)
 {
-	(void)faulttype; (void)faultaddress;
-	return 0;
-	/*
-	vaddr_t vbase1, vtop1, vbase2, vtop2, stackbase, stacktop;
 	paddr_t paddr;
 	int i;
 	uint32_t ehi, elo;
@@ -242,68 +240,80 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	int spl;
 
 	faultaddress &= PAGE_FRAME;
-
-	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
-
-	switch (faulttype) {
-	    case VM_FAULT_READONLY:
-		 We always create pages read-write, so we can't get this
-		panic("dumbvm: got VM_FAULT_READONLY\n");
-	    case VM_FAULT_READ:
-	    case VM_FAULT_WRITE:
-		break;
-	    default:
-		return EINVAL;
-	}
-
+	int uberIndex=VADDR_TO_UBERINDEX(faultaddress);
+	int subIndex=VADDR_TO_SUBINDEX(faultaddress);
 	as = curthread->t_addrspace;
 	if (as == NULL) {
 
-	 * No address space set up. This is probably a kernel
-	 * fault early in boot. Return EFAULT so as to panic
-	 * instead of getting into an infinite faulting loop.
-
+		// * No address space set up. This is probably a kernel
+		// * fault early in boot. Return EFAULT so as to panic
+		// * instead of getting into an infinite faulting loop.
 		return EFAULT;
 	}
+	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
 
-	 Assert that the address space has been set up properly.
-	KASSERT(as->as_vbase1 != 0);
-	KASSERT(as->as_pbase1 != 0);
-	KASSERT(as->as_npages1 != 0);
-	KASSERT(as->as_vbase2 != 0);
-	KASSERT(as->as_pbase2 != 0);
-	KASSERT(as->as_npages2 != 0);
-	KASSERT(as->as_stackpbase != 0);
-	KASSERT((as->as_vbase1 & PAGE_FRAME) == as->as_vbase1);
-	KASSERT((as->as_pbase1 & PAGE_FRAME) == as->as_pbase1);
-	KASSERT((as->as_vbase2 & PAGE_FRAME) == as->as_vbase2);
-	KASSERT((as->as_pbase2 & PAGE_FRAME) == as->as_pbase2);
-	KASSERT((as->as_stackpbase & PAGE_FRAME) == as->as_stackpbase);
 
-	vbase1 = as->as_vbase1;
-	vtop1 = vbase1 + as->as_npages1 * PAGE_SIZE;
-	vbase2 = as->as_vbase2;
-	vtop2 = vbase2 + as->as_npages2 * PAGE_SIZE;
-	stackbase = USERSTACK - DUMBVM_STACKPAGES * PAGE_SIZE;
-	stacktop = USERSTACK;
-
-	if (faultaddress >= vbase1 && faultaddress < vtop1) {
-		paddr = (faultaddress - vbase1) + as->as_pbase1;
-	}
-	else if (faultaddress >= vbase2 && faultaddress < vtop2) {
-		paddr = (faultaddress - vbase2) + as->as_pbase2;
-	}
-	else if (faultaddress >= stackbase && faultaddress < stacktop) {
-		paddr = (faultaddress - stackbase) + as->as_stackpbase;
-	}
-	else {
+	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX)
 		return EFAULT;
+	if(uberIndex < STACK_MAX)
+	{
+		switch (faulttype) {
+		case VM_FAULT_READONLY:
+			if( (as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
+				return EFAULT;
+			break;
+		case VM_FAULT_READ:
+			if((as->uberArray[uberIndex][subIndex]->permission & 0x4) == 0)
+				return EFAULT;
+			break;
+		case VM_FAULT_WRITE:
+			if((as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
+				return EFAULT;
+			break;
+		default:
+			return EINVAL;
+		}
 	}
 
-	 make sure it's page-aligned
-	KASSERT((paddr & PAGE_FRAME) == paddr);
 
-	 Disable interrupts on this CPU while frobbing the TLB.
+
+	//if control comes here it means its not a segmentation fault
+	//Address translation-> find paddr
+
+	if(uberIndex >= STACK_MAX)
+	{
+		//if last 1024 pages just assume its stack.... for now?
+		if(as->uberArray[uberIndex]==NULL)
+		{
+			as_init_uberarray_section(as, uberIndex);
+		}
+		if(as->uberArray[uberIndex][subIndex] == NULL)
+		{
+			as->uberArray[uberIndex][subIndex] = kmalloc(sizeof(struct virtualpage));
+			as->uberArray[uberIndex][subIndex]->coremapindex = -1;
+			as->uberArray[uberIndex][subIndex]->swapfileoffset = -1;
+			as->uberArray[uberIndex][subIndex]->permission = 0x7;
+			int index = allocate_userpage(as);
+			as->uberArray[uberIndex][subIndex]->coremapindex = index;
+		}
+	}
+	else if(as->uberArray[uberIndex][subIndex]->coremapindex == -1)
+	{
+		int index = allocate_userpage(as);
+		as->uberArray[uberIndex][subIndex]->coremapindex = index;
+	}
+
+	//we will check if the virtual page is in coremap or not....right now we are assuming it is in coremap.
+
+	KASSERT(as->uberArray[uberIndex][subIndex]->coremapindex != -1);
+	paddr=g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].pa;
+
+
+
+
+	//KASSERT((paddr & PAGE_FRAME) == paddr);
+
+	// Disable interrupts on this CPU while frobbing the TLB.
 	spl = splhigh();
 
 	for (i=0; i<NUM_TLB; i++) {
@@ -319,8 +329,16 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		return 0;
 	}
 
-	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+	as->tlbclock = (as->tlbclock + 1) % NUM_TLB;
+	ehi = faultaddress;
+	elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+	DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
+	tlb_write(ehi, elo, as->tlbclock);
 	splx(spl);
-	return EFAULT;
-	 */
+	return 0;
+	//kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+	//splx(spl);
+	//return EFAULT;
+
+
 }

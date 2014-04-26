@@ -207,21 +207,17 @@ int sys_execv(userptr_t prog, userptr_t argsptr)
 	int err = copyin(argsptr, program,1); // doing this just to make sure its valid address
 	if(err)
 	{
-			kfree(program);
-			return EFAULT;
+		kfree(program);
+		return EFAULT;
 	}
 
 	err = copyinstr(prog, program, 1000, &proglen);
 	if(err)
 	{
-			kfree(program);
-			return EFAULT;
-	}
-	if(err)
-	{
 		kfree(program);
 		return EFAULT;
 	}
+
 	char** args=(char**)argsptr;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
@@ -234,6 +230,7 @@ int sys_execv(userptr_t prog, userptr_t argsptr)
 	unsigned long argc;
 	//Calculate the size of the array to allocate
 	char * tempArgs=kmalloc(1000);
+
 
 	while(args[j]!=NULL){
 		//strlen = kstrcpy(args[j], tempArgs);//
@@ -258,7 +255,7 @@ int sys_execv(userptr_t prog, userptr_t argsptr)
 	while(args[j]!=NULL){
 		strlen=0;
 		*((int*)(kargv + j*4))=top;
-	//	strlen = kstrcpy(args[j], kargv+top);//
+		//	strlen = kstrcpy(args[j], kargv+top);//
 		copyinstr((userptr_t)args[j], kargv+top, 1000,&strlen);
 		top+=strlen;
 		while(top%4!=0){
@@ -276,6 +273,15 @@ int sys_execv(userptr_t prog, userptr_t argsptr)
 	if (result) {
 		return result;
 	}
+
+	curthread->t_addrspace = as_create();
+	if (curthread->t_addrspace==NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	/* Activate it. */
+	as_activate(curthread->t_addrspace);
 
 	/* Load the executable. */
 	result = load_elf(v, &entrypoint);
@@ -408,16 +414,16 @@ int sys_waitpid(pid_t pid, userptr_t status, int options, int *retval, int isker
 	P(g_pidlist[pid]->sem);
 
 	exit = _MKWAIT_EXIT(g_pidlist[pid]->exitstatus);
-		if(iskernspace == 1)
-		{
-			*((int*)status) = g_pidlist[pid]->exitstatus;
-		}
-		else
-		{
-			int err = copyout(&exit, status, sizeof(int));
-			if(err)
-				return err;
-		}
+	if(iskernspace == 1)
+	{
+		*((int*)status) = g_pidlist[pid]->exitstatus;
+	}
+	else
+	{
+		int err = copyout(&exit, status, sizeof(int));
+		if(err)
+			return err;
+	}
 
 	sem_destroy(g_pidlist[pid]->sem);
 	kfree(g_pidlist[pid]);

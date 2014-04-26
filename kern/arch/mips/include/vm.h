@@ -80,12 +80,13 @@ typedef uint32_t page_state_t;
 
 #define VADDR_TO_SUBINDEX(X) ( (int)((X & 0x003FF000) >> 12) )
 
-#define BYTES_TO_PAGES(bytes) ( (bytes/PAGE_SIZE) + (bytes%PAGE_SIZE ==0)?0:1  )
+#define BYTES_TO_PAGES(bytes) ( (bytes/PAGE_SIZE) + ((bytes%PAGE_SIZE ==0)?0:1 ) )
 
 #define INDECES_TO_VADDR(uber, sub)	( uber << 22 | sub <<12)
 
 #define NUM_UBERPAGES 512
 #define NUM_SUBPAGES 1024
+#define STACK_MAX 511
 /*
  * The top of user space. (Actually, the address immediately above the
  * last valid user address.)
@@ -140,7 +141,7 @@ struct tlbshootdown {
 
 paddr_t allocate_onepage(void);
 paddr_t allocate_multiplepages(int npages);
-int32_t allocate_userpage(void);
+int32_t allocate_userpage(struct addrspace*);
 
 struct virtualpage
 {
@@ -158,7 +159,7 @@ struct memorypage
 
     uint64_t numallocations;
     uint64_t timestamp;
-
+    struct addrspace *as;
     //add more stuff here
 };
 

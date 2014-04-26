@@ -40,6 +40,13 @@
 
 struct vnode;
 
+struct segment
+{
+	vaddr_t startaddress;
+	int	npages;
+	int8_t actualpermission;
+	struct segment* next;
+};
 
 /* 
  * Address space - data structure associated with the virtual memory
@@ -62,6 +69,8 @@ struct addrspace {
 	vaddr_t as_heapbase,as_heapend;
 	vaddr_t as_sttop;
 	struct virtualpage ** uberArray[NUM_UBERPAGES];
+	struct segment* segmentll;
+	int tlbclock;
 
 #endif
 };
