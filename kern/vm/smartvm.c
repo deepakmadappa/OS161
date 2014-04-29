@@ -174,8 +174,9 @@ paddr_t allocate_multiplepages(int npages)
 	return g_coremap.physicalpages[i-npages +1].pa;
 }
 
-int32_t allocate_userpage(struct addrspace* as)
+int32_t allocate_userpage(struct addrspace* as, bool bsetzero)
 {
+	KASSERT(as != NULL);
 	spinlock_acquire(&spinlkcore);
 	for(uint32_t i=0;i<g_coremap.numpages;i++)
 	{
@@ -185,6 +186,10 @@ int32_t allocate_userpage(struct addrspace* as)
 			g_coremap.physicalpages[i].state = PAGE_DIRTY;
 			g_coremap.physicalpages[i].as = as;
 			spinlock_release(&spinlkcore);
+			if(bsetzero)
+			{
+				memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
+			}
 			return (int32_t)i;
 		}
 	}
@@ -200,19 +205,31 @@ void free_userpage(int32_t index)
 {
 	KASSERT(g_coremap.physicalpages[index].state != PAGE_FREE);
 	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED);
+	//KASSERT(g_coremap.physicalpages[index].pa )
 	spinlock_acquire(&spinlkcore);
 	g_coremap.physicalpages[index].numallocations = 0;
 	g_coremap.physicalpages[index].state = PAGE_FREE;
 	g_coremap.physicalpages[index].as = NULL;
+	//memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[index].pa), 0, PAGE_SIZE );
 	spinlock_release(&spinlkcore);
+}
+
+void* memset(void *ptr, int ch, size_t len)
+{
+	char *p = ptr;
+	size_t i;
+
+	for (i=0; i<len; i++) {
+		p[i] = ch;
+	}
+
+	return ptr;
 }
 
 void
 free_kpages(vaddr_t kaddr)
 {
-	(void)kaddr;
-	return;
-	if(g_coremap.bisbootstrapdone == false)
+	if(g_coremap.bisbootstrapdone == false || KVADDR_TO_PADDR(kaddr) < g_coremap.freeaddr)
 		return ;// leak memory for memsteals
 	KASSERT(kaddr % PAGE_SIZE == 0);
 	paddr_t addr = KVADDR_TO_PADDR(kaddr);
@@ -227,6 +244,7 @@ free_kpages(vaddr_t kaddr)
 		KASSERT(g_coremap.physicalpages[i].state == PAGE_FIXED);
 		g_coremap.physicalpages[i].state = PAGE_FREE;
 		g_coremap.physicalpages[i].as = NULL;
+		//memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
 	}
 	spinlock_release(&spinlkcore);
 }
@@ -312,13 +330,13 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		{
 			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
 			as->uberArray[uberIndex][subIndex]->permission = 0x7;
-			int index = allocate_userpage(as);
+			int index = allocate_userpage(as, false);
 			as->uberArray[uberIndex][subIndex]->coremapindex = index;
 		}
 	}
 	else if(as->uberArray[uberIndex][subIndex]->coremapindex == -1)
 	{
-		int index = allocate_userpage(as);
+		int index = allocate_userpage(as, as->uberArray[uberIndex][subIndex]->issegment);
 		as->uberArray[uberIndex][subIndex]->coremapindex = index;
 	}
 

@@ -77,19 +77,22 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	{
 		if(old->uberArray[i] != NULL)
 		{
-			as_init_uberarray_section(newas, i);
+			if(newas->uberArray[i] == NULL)
+				as_init_uberarray_section(newas, i);
 			for(int j=0; j<NUM_SUBPAGES; j++)
 			{
 				if(old->uberArray[i][j] != NULL)
 				{
 					//allocate user page
-
+					KASSERT(newas->uberArray[i][j] == NULL);
 					newas->uberArray[i][j] = as_init_virtualpage();
+					newas->uberArray[i][j]->issegment = old->uberArray[i][j]->issegment;
 					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
 					if(old->uberArray[i][j]->coremapindex != -1)
 					{
-						int32_t address = allocate_userpage(newas);
+						int32_t address = allocate_userpage(newas, newas->uberArray[i][j]->issegment);
+						memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
 						if(address == -1)
 							KASSERT(!"User page allocation must not fail");
 						newas->uberArray[i][j]->coremapindex = address;
@@ -121,6 +124,7 @@ as_destroy(struct addrspace *as)
 				{
 					if(as->uberArray[i][j]->coremapindex != -1)//there exists a frame corresponding to virtual page, free it
 					{
+						KASSERT(g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].as == as);
 						free_userpage(as->uberArray[i][j]->coremapindex);
 					}
 					if(as->uberArray[i][j]->swapfileoffset != -1)
@@ -194,6 +198,7 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
 			return EFAULT;	//address already in use
 		}
 		as->uberArray[uberindex][subindex] = as_init_virtualpage();
+		as->uberArray[uberindex][subindex]->issegment = true;
 		as->uberArray[uberindex][subindex]->permission = (int8_t)0x2;
 
 		subindex++;
@@ -238,6 +243,7 @@ as_prepare_load(struct addrspace *as)
 
 /*
 
+
 	for(int i=0; i<NUM_UBERPAGES; i++)
 	{
 		if(as->uberArray[i] != NULL)
@@ -248,6 +254,8 @@ as_prepare_load(struct addrspace *as)
 				{
 					//allocate user page
 					int32_t address = allocate_userpage(as);
+					memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
+
 					if(address == -1)
 						KASSERT(!"User page allocation must not fail");
 					as->uberArray[i][j]->coremapindex = address;
@@ -315,5 +323,6 @@ struct virtualpage* as_init_virtualpage()
 	page->coremapindex = -1;
 	page->swapfileoffset = -1;
 	page->permission = 0;
+	page->issegment = false;
 	return page;
 }
