@@ -143,7 +143,7 @@ paddr_t allocate_multiplepages(int npages)
 
 	uint32_t i=0;
 	int count = 0;
-	while(i< g_coremap.numpages - npages)
+	while(i< g_coremap.numpages)
 	{
 		if(g_coremap.physicalpages[i].state == PAGE_FREE)
 		{
@@ -196,24 +196,45 @@ int32_t allocate_userpage(struct addrspace* as)
 	return -1;
 }
 
+void free_userpage(int32_t index)
+{
+	KASSERT(g_coremap.physicalpages[index].state != PAGE_FREE);
+	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED);
+	spinlock_acquire(&spinlkcore);
+	g_coremap.physicalpages[index].numallocations = 0;
+	g_coremap.physicalpages[index].state = PAGE_FREE;
+	g_coremap.physicalpages[index].as = NULL;
+	spinlock_release(&spinlkcore);
+}
+
 void
 free_kpages(vaddr_t kaddr)
 {
-
+	(void)kaddr;
+	return;
 	if(g_coremap.bisbootstrapdone == false)
 		return ;// leak memory for memsteals
-
+	KASSERT(kaddr % PAGE_SIZE == 0);
 	paddr_t addr = KVADDR_TO_PADDR(kaddr);
 	spinlock_acquire(&spinlkcore);
 
 	int startindex = addr/PAGE_SIZE;
+	KASSERT(g_coremap.physicalpages[startindex].numallocations != 0);
 	KASSERT(startindex + g_coremap.physicalpages[startindex].numallocations < g_coremap.numpages);
 	for(uint32_t i=startindex; i< startindex + g_coremap.physicalpages[startindex].numallocations; i++ )
 	{
 		KASSERT(g_coremap.physicalpages[i].state != PAGE_FREE);
+		KASSERT(g_coremap.physicalpages[i].state == PAGE_FIXED);
 		g_coremap.physicalpages[i].state = PAGE_FREE;
 		g_coremap.physicalpages[i].as = NULL;
 	}
+	spinlock_release(&spinlkcore);
+}
+
+void copy_page(int32_t dst, int32_t src)
+{
+	spinlock_acquire(&spinlkcore);
+	memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[dst].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[src].pa), PAGE_SIZE);
 	spinlock_release(&spinlkcore);
 }
 
@@ -289,9 +310,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		if(as->uberArray[uberIndex][subIndex] == NULL)
 		{
-			as->uberArray[uberIndex][subIndex] = kmalloc(sizeof(struct virtualpage));
-			as->uberArray[uberIndex][subIndex]->coremapindex = -1;
-			as->uberArray[uberIndex][subIndex]->swapfileoffset = -1;
+			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
 			as->uberArray[uberIndex][subIndex]->permission = 0x7;
 			int index = allocate_userpage(as);
 			as->uberArray[uberIndex][subIndex]->coremapindex = index;
@@ -309,8 +328,10 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	paddr=g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].pa;
 
 
-
-
+	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].state != PAGE_FREE);
+	//if(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != as)
+		KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == as || g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == NULL);
+	//KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex]);
 	//KASSERT((paddr & PAGE_FRAME) == paddr);
 
 	// Disable interrupts on this CPU while frobbing the TLB.

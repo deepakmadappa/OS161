@@ -124,6 +124,7 @@ int               as_complete_load(struct addrspace *as);
 int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 
 void as_init_uberarray_section(struct addrspace *as, int index);
+struct virtualpage* as_init_virtualpage(void);
 
 /*
  * Functions in loadelf.c

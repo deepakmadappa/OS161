@@ -142,6 +142,9 @@ struct tlbshootdown {
 paddr_t allocate_onepage(void);
 paddr_t allocate_multiplepages(int npages);
 int32_t allocate_userpage(struct addrspace*);
+void free_userpage(int32_t index);
+void copy_page(int32_t dst, int32_t src);
+
 
 struct virtualpage
 {
