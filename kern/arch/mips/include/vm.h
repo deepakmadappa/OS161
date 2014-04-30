@@ -141,7 +141,7 @@ struct tlbshootdown {
 
 paddr_t allocate_onepage(void);
 paddr_t allocate_multiplepages(int npages);
-int32_t allocate_userpage(struct addrspace*, bool);
+int32_t allocate_userpage(struct addrspace*);
 void free_userpage(int32_t index);
 void copy_page(int32_t dst, int32_t src);
 void* memset(void *ptr, int ch, size_t len);
@@ -153,7 +153,6 @@ struct virtualpage
 	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
 	off_t swapfileoffset;
 	uint8_t permission;
-	bool issegment;
 };
 
 struct memorypage

@@ -74,6 +74,7 @@ int sys_fork(struct trapframe *ptf, pid_t *pid);
 int sys_execv(userptr_t program, userptr_t args);
 int sys_waitpid(pid_t pid, userptr_t status, int options,int*, int);
 void sys_exit(int exitcode);
+int sys_sbrk(intptr_t amt, vaddr_t *retval);
 
 void child_fork(void* data1, unsigned long data2);
 

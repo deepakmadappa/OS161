@@ -86,12 +86,11 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 					//allocate user page
 					KASSERT(newas->uberArray[i][j] == NULL);
 					newas->uberArray[i][j] = as_init_virtualpage();
-					newas->uberArray[i][j]->issegment = old->uberArray[i][j]->issegment;
 					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
 					if(old->uberArray[i][j]->coremapindex != -1)
 					{
-						int32_t address = allocate_userpage(newas, newas->uberArray[i][j]->issegment);
+						int32_t address = allocate_userpage(newas);
 						memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
 						if(address == -1)
 							KASSERT(!"User page allocation must not fail");
@@ -198,7 +197,6 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
 			return EFAULT;	//address already in use
 		}
 		as->uberArray[uberindex][subindex] = as_init_virtualpage();
-		as->uberArray[uberindex][subindex]->issegment = true;
 		as->uberArray[uberindex][subindex]->permission = (int8_t)0x2;
 
 		subindex++;
@@ -323,6 +321,5 @@ struct virtualpage* as_init_virtualpage()
 	page->coremapindex = -1;
 	page->swapfileoffset = -1;
 	page->permission = 0;
-	page->issegment = false;
 	return page;
 }

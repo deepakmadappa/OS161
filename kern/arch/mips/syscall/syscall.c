@@ -101,6 +101,8 @@ syscall(struct trapframe *tf)
 	retval = 0;
 	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 	off_t pos;
+	uint32_t ret;
+
 
 	switch (callno) {
 	case SYS_reboot:
@@ -183,8 +185,10 @@ syscall(struct trapframe *tf)
 		err=sys_execv((userptr_t)tf->tf_a0,(userptr_t)tf->tf_a1);
 		break;
 
-
-
+	case SYS_sbrk:
+		err = sys_sbrk(tf->tf_a0, &ret);
+		retval = (int32_t)ret;
+		break;
 		/*****************************************END OF PROCESS SYSTEM CALLS******************/
 
 		/* Add stuff here */

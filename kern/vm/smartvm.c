@@ -174,7 +174,7 @@ paddr_t allocate_multiplepages(int npages)
 	return g_coremap.physicalpages[i-npages +1].pa;
 }
 
-int32_t allocate_userpage(struct addrspace* as, bool bsetzero)
+int32_t allocate_userpage(struct addrspace* as)
 {
 	KASSERT(as != NULL);
 	spinlock_acquire(&spinlkcore);
@@ -186,10 +186,7 @@ int32_t allocate_userpage(struct addrspace* as, bool bsetzero)
 			g_coremap.physicalpages[i].state = PAGE_DIRTY;
 			g_coremap.physicalpages[i].as = as;
 			spinlock_release(&spinlkcore);
-			if(bsetzero)
-			{
-				memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
-			}
+			memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
 			return (int32_t)i;
 		}
 	}
@@ -292,9 +289,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
 
 
-	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX)
+	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
 		return EFAULT;
-	if(uberIndex < STACK_MAX)
+	if(uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
 	{
 		switch (faulttype) {
 		case VM_FAULT_READONLY:
@@ -329,14 +326,30 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		if(as->uberArray[uberIndex][subIndex] == NULL)
 		{
 			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
-			as->uberArray[uberIndex][subIndex]->permission = 0x7;
-			int index = allocate_userpage(as, false);
+			as->uberArray[uberIndex][subIndex]->permission = 0x6;
+			int index = allocate_userpage(as);
+			as->uberArray[uberIndex][subIndex]->coremapindex = index;
+		}
+		if(as->as_sttop < faultaddress)
+			as->as_sttop = faultaddress;
+	}
+	else if(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend)
+	{
+		if(as->uberArray[uberIndex]==NULL)
+		{
+			as_init_uberarray_section(as, uberIndex);
+		}
+		if(as->uberArray[uberIndex][subIndex] == NULL)
+		{
+			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
+			as->uberArray[uberIndex][subIndex]->permission = 0x6;
+			int index = allocate_userpage(as);
 			as->uberArray[uberIndex][subIndex]->coremapindex = index;
 		}
 	}
 	else if(as->uberArray[uberIndex][subIndex]->coremapindex == -1)
 	{
-		int index = allocate_userpage(as, as->uberArray[uberIndex][subIndex]->issegment);
+		int index = allocate_userpage(as);
 		as->uberArray[uberIndex][subIndex]->coremapindex = index;
 	}
 
@@ -348,7 +361,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].state != PAGE_FREE);
 	//if(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != as)
-		KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == as || g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == NULL);
+	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == as || g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == NULL);
 	//KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex]);
 	//KASSERT((paddr & PAGE_FRAME) == paddr);
 

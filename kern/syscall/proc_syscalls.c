@@ -506,3 +506,58 @@ int createpid(struct thread* newthread, pid_t *ret)
 	lock_release(g_lk_pid);
 	return ENPROC;
 }
+
+/*
+ *
+ * Name
+sbrk - set process break (allocate memory)
+Library
+Standard C Library (libc, -lc)
+Synopsis
+#include <unistd.h>
+
+void *
+sbrk(intptr_t amount);
+Description
+The "break" is the end address of a process's heap region. The sbrk call adjusts the "break" by the amount amount. It returns the old "break". Thus, to determine the current "break", call sbrk(0).
+
+The heap region is initially empty, so at process startup, the beginning of the heap region is the same as the end and may thus be retrieved using sbrk(0).
+
+In OS/161, the initial "break" must be page-aligned, and sbrk only need support values of amount that result in page-aligned "break" addresses. Other values of amount may be rejected. (This may simplify the implementation. On the other hand, you may choose to support unaligned values anyway, as that may simplify your malloc code.)
+
+Traditionally, the initial "break" is specifically defined to be the end of the BSS (uninitialized data) region, and any amount, page-aligned or not, may legally be used with sbrk.
+
+Ordinarily, user-level code should call malloc for memory allocation. The sbrk interface is intended only to be the back-end interface for malloc. Mixing calls to malloc and sbrk will likely confuse malloc and produces undefined behavior.
+
+While one can lower the "break" by passing negative values of amount, one may not set the end of the heap to an address lower than the beginning of the heap. Attempts to do so must be rejected.
+
+Return Values
+On success, sbrk returns the previous value of the "break". On error, ((void *)-1) is returned, and errno is set according to the error encountered.
+Errors
+The following error codes should be returned under the conditions given. Other error codes may be returned for other errors not mentioned here.
+
+
+    ENOMEM		Sufficient virtual memory to satisfy the request was not available, or the process has reached the limit of the memory it is allowed to allocate.
+    EINVAL		The request would move the "break" below its initial value.
+
+Restrictions
+While you can return pages that happen to be at the end of the heap to the system, there is no way to use the sbrk interface to return unused pages in the middle of the heap. If you wish to do this, you will need to design a new or supplemental interface.
+
+*/
+
+int sys_sbrk(intptr_t amt, vaddr_t *retval)
+{
+	struct addrspace* as = curthread->t_addrspace;
+	vaddr_t oldaddr = as->as_heapend;
+	vaddr_t newaddr = as->as_heapend + amt;
+	if(newaddr < as->as_heapbase)
+		return EINVAL;
+	if(newaddr > as->as_sttop)
+		return ENOMEM;
+	//need to check for stack passing
+	as->as_heapend = newaddr;
+	*retval = oldaddr;
+	return 0;
+}
+
+
