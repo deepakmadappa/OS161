@@ -30,7 +30,7 @@
 #ifndef _MIPS_VM_H_
 #define _MIPS_VM_H_
 
-typedef uint32_t page_state_t;
+typedef uint8_t page_state_t;
 
 #define PAGE_FREE 0
 #define PAGE_CLEAN 1
@@ -151,7 +151,7 @@ void* memset(void *ptr, int ch, size_t len);
 struct virtualpage
 {
 	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
-	off_t swapfileoffset;
+	int16_t swapfileoffset;
 	uint8_t permission;
 };
 
@@ -162,8 +162,8 @@ struct memorypage
     /* page state */
     page_state_t state;
 
-    uint64_t numallocations;
-    uint64_t timestamp;
+    uint32_t numallocations;
+    //uint64_t timestamp;
     struct addrspace *as;
     //add more stuff here
 };

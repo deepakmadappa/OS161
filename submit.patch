@@ -12,14 +12,14 @@ index 993b10c..c3c63dd 100644
   * MIPS exception codes.
   */
 diff --git a/kern/arch/mips/include/vm.h b/kern/arch/mips/include/vm.h
-index af393c7..32229ea 100644
+index af393c7..ac90d19 100644
 --- a/kern/arch/mips/include/vm.h
 +++ b/kern/arch/mips/include/vm.h
 @@ -30,7 +30,12 @@
  #ifndef _MIPS_VM_H_
  #define _MIPS_VM_H_
  
-+typedef uint32_t page_state_t;
++typedef uint8_t page_state_t;
  
 +#define PAGE_FREE 0
 +#define PAGE_CLEAN 1
@@ -50,7 +50,7 @@ index af393c7..32229ea 100644
  /*
   * The top of user space. (Actually, the address immediately above the
   * last valid user address.)
-@@ -116,7 +136,46 @@ struct tlbshootdown {
+@@ -116,7 +136,51 @@ struct tlbshootdown {
  	vaddr_t ts_vaddr;
  };
  
@@ -60,11 +60,16 @@ index af393c7..32229ea 100644
 +paddr_t allocate_onepage(void);
 +paddr_t allocate_multiplepages(int npages);
 +int32_t allocate_userpage(struct addrspace*);
++void free_userpage(int32_t index);
++void copy_page(int32_t dst, int32_t src);
++void* memset(void *ptr, int ch, size_t len);
++
++
 +
 +struct virtualpage
 +{
 +	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
-+	off_t swapfileoffset;
++	int16_t swapfileoffset;
 +	uint8_t permission;
 +};
 +
@@ -75,8 +80,8 @@ index af393c7..32229ea 100644
 +    /* page state */
 +    page_state_t state;
 +
-+    uint64_t numallocations;
-+    uint64_t timestamp;
++    uint32_t numallocations;
++    //uint64_t timestamp;
 +    struct addrspace *as;
 +    //add more stuff here
 +};
@@ -114,7 +119,7 @@ index ff39633..8aaecaf 100644
  }
  
 diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
-index 0f773bd..70b882e 100644
+index 0f773bd..459b7be 100644
 --- a/kern/arch/mips/syscall/syscall.c
 +++ b/kern/arch/mips/syscall/syscall.c
 @@ -35,6 +35,7 @@
@@ -125,7 +130,7 @@ index 0f773bd..70b882e 100644
  
  
  /*
-@@ -96,22 +97,99 @@ syscall(struct trapframe *tf)
+@@ -96,22 +97,103 @@ syscall(struct trapframe *tf)
  	 * deal with it except for calls that return other values, 
  	 * like write.
  	 */
@@ -134,6 +139,8 @@ index 0f773bd..70b882e 100644
  	retval = 0;
 +	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 +	off_t pos;
++	uint32_t ret;
++
  
  	switch (callno) {
 -	    case SYS_reboot:
@@ -180,17 +187,17 @@ index 0f773bd..70b882e 100644
 +
 +	case SYS_close:
 +		err = sys_close(tf->tf_a0);
++		break;
++
++	case SYS_dup2:
++		//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
++		err = sys_dup2(tf->tf_a0, tf->tf_a1,&retval);
++
  		break;
  
 -	    /* Add stuff here */
 - 
 -	    default:
-+	case SYS_dup2:
-+		//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
-+		err = sys_dup2(tf->tf_a0, tf->tf_a1,&retval);
-+
-+		break;
-+
 +	case SYS_chdir:
 +		err = sys_chdir((userptr_t) tf->tf_a0);
 +		break;
@@ -222,8 +229,10 @@ index 0f773bd..70b882e 100644
 +		err=sys_execv((userptr_t)tf->tf_a0,(userptr_t)tf->tf_a1);
 +		break;
 +
-+
-+
++	case SYS_sbrk:
++		err = sys_sbrk(tf->tf_a0, &ret);
++		retval = (int32_t)ret;
++		break;
 +		/*****************************************END OF PROCESS SYSTEM CALLS******************/
 +
 +		/* Add stuff here */
@@ -232,7 +241,7 @@ index 0f773bd..70b882e 100644
  		kprintf("Unknown syscall %d\n", callno);
  		err = ENOSYS;
  		break;
-@@ -132,12 +210,12 @@ syscall(struct trapframe *tf)
+@@ -132,12 +214,12 @@ syscall(struct trapframe *tf)
  		tf->tf_v0 = retval;
  		tf->tf_a3 = 0;      /* signal no error */
  	}
@@ -283,7 +292,7 @@ index d527f61..c6a1430 100644
  #
  # Startup and initialization
 diff --git a/kern/include/addrspace.h b/kern/include/addrspace.h
-index 6788e97..a5e76bf 100644
+index 6788e97..1983cc3 100644
 --- a/kern/include/addrspace.h
 +++ b/kern/include/addrspace.h
 @@ -40,6 +40,13 @@
@@ -330,7 +339,7 @@ index 6788e97..a5e76bf 100644
  #endif
  };
  
-@@ -102,14 +115,15 @@ void              as_activate(struct addrspace *);
+@@ -102,14 +115,16 @@ void              as_activate(struct addrspace *);
  void              as_destroy(struct addrspace *);
  
  int               as_define_region(struct addrspace *as, 
@@ -347,9 +356,32 @@ index 6788e97..a5e76bf 100644
  int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
  
 +void as_init_uberarray_section(struct addrspace *as, int index);
++struct virtualpage* as_init_virtualpage(void);
  
  /*
   * Functions in loadelf.c
+diff --git a/kern/include/kern/limits.h b/kern/include/kern/limits.h
+index 3fad3f2..296bf6d 100644
+--- a/kern/include/kern/limits.h
++++ b/kern/include/kern/limits.h
+@@ -66,7 +66,7 @@
+ #define __PID_MIN       2
+ 
+ /* Max value for a process ID */
+-#define __PID_MAX       32767
++#define __PID_MAX       64
+ 
+ /* Max bytes for atomic pipe I/O -- see description in the pipe() man page */
+ #define __PIPE_BUF      512
+@@ -91,7 +91,7 @@
+  */
+ 
+ /* Max open files per process */
+-#define __OPEN_MAX      128
++#define __OPEN_MAX      8
+ 
+ /* Max number of iovec structures at once for readv/writev/preadv/pwritev */
+ #define __IOV_MAX       1024
 diff --git a/kern/include/synch.h b/kern/include/synch.h
 index ac3714b..48e2d18 100644
 --- a/kern/include/synch.h
@@ -389,10 +421,10 @@ index ac3714b..48e2d18 100644
  
  struct rwlock * rwlock_create(const char *);
 diff --git a/kern/include/syscall.h b/kern/include/syscall.h
-index befd3d8..7cab4e4 100644
+index befd3d8..b36b02a 100644
 --- a/kern/include/syscall.h
 +++ b/kern/include/syscall.h
-@@ -58,4 +58,23 @@ void enter_new_process(int argc, userptr_t argv, vaddr_t stackptr,
+@@ -58,4 +58,24 @@ void enter_new_process(int argc, userptr_t argv, vaddr_t stackptr,
  int sys_reboot(int code);
  int sys___time(userptr_t user_seconds, userptr_t user_nanoseconds);
  
@@ -412,6 +444,7 @@ index befd3d8..7cab4e4 100644
 +int sys_execv(userptr_t program, userptr_t args);
 +int sys_waitpid(pid_t pid, userptr_t status, int options,int*, int);
 +void sys_exit(int exitcode);
++int sys_sbrk(intptr_t amt, vaddr_t *retval);
 +
 +void child_fork(void* data1, unsigned long data2);
 +
@@ -8950,10 +8983,10 @@ index 0000000..8dea3c2
 +}
 diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 new file mode 100644
-index 0000000..a44f3bc
+index 0000000..ad966b9
 --- /dev/null
 +++ b/kern/syscall/proc_syscalls.c
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,563 @@
 +#include <types.h>
 +#include <syscall.h>
 +#include <kern/errno.h>
@@ -9109,7 +9142,7 @@ index 0000000..a44f3bc
 +		return err;
 +	P(s);
 +	*pid = *(msg->pid);
-+	kfree(msg->sem);
++	sem_destroy(msg->sem);
 +	kfree(msg->pid);
 +	kfree(msg);
 +
@@ -9462,6 +9495,61 @@ index 0000000..a44f3bc
 +	lock_release(g_lk_pid);
 +	return ENPROC;
 +}
++
++/*
++ *
++ * Name
++sbrk - set process break (allocate memory)
++Library
++Standard C Library (libc, -lc)
++Synopsis
++#include <unistd.h>
++
++void *
++sbrk(intptr_t amount);
++Description
++The "break" is the end address of a process's heap region. The sbrk call adjusts the "break" by the amount amount. It returns the old "break". Thus, to determine the current "break", call sbrk(0).
++
++The heap region is initially empty, so at process startup, the beginning of the heap region is the same as the end and may thus be retrieved using sbrk(0).
++
++In OS/161, the initial "break" must be page-aligned, and sbrk only need support values of amount that result in page-aligned "break" addresses. Other values of amount may be rejected. (This may simplify the implementation. On the other hand, you may choose to support unaligned values anyway, as that may simplify your malloc code.)
++
++Traditionally, the initial "break" is specifically defined to be the end of the BSS (uninitialized data) region, and any amount, page-aligned or not, may legally be used with sbrk.
++
++Ordinarily, user-level code should call malloc for memory allocation. The sbrk interface is intended only to be the back-end interface for malloc. Mixing calls to malloc and sbrk will likely confuse malloc and produces undefined behavior.
++
++While one can lower the "break" by passing negative values of amount, one may not set the end of the heap to an address lower than the beginning of the heap. Attempts to do so must be rejected.
++
++Return Values
++On success, sbrk returns the previous value of the "break". On error, ((void *)-1) is returned, and errno is set according to the error encountered.
++Errors
++The following error codes should be returned under the conditions given. Other error codes may be returned for other errors not mentioned here.
++
++
++    ENOMEM		Sufficient virtual memory to satisfy the request was not available, or the process has reached the limit of the memory it is allowed to allocate.
++    EINVAL		The request would move the "break" below its initial value.
++
++Restrictions
++While you can return pages that happen to be at the end of the heap to the system, there is no way to use the sbrk interface to return unused pages in the middle of the heap. If you wish to do this, you will need to design a new or supplemental interface.
++
++*/
++
++int sys_sbrk(intptr_t amt, vaddr_t *retval)
++{
++	struct addrspace* as = curthread->t_addrspace;
++	vaddr_t oldaddr = as->as_heapend;
++	vaddr_t newaddr = as->as_heapend + amt;
++	if(newaddr < as->as_heapbase)
++		return EINVAL;
++	if(newaddr > as->as_sttop)
++		return ENOMEM;
++	//need to check for stack passing
++	as->as_heapend = newaddr;
++	*retval = oldaddr;
++	return 0;
++}
++
++
 diff --git a/kern/syscall/runprogram.c b/kern/syscall/runprogram.c
 index a6f45c8..0246a1e 100644
 --- a/kern/syscall/runprogram.c
@@ -10315,7 +10403,7 @@ index 3e439c6..2ae3507 100644
   * Does most of the work for readlink().
   *
 diff --git a/kern/vm/addrspace.c b/kern/vm/addrspace.c
-index 302fa7b..356078a 100644
+index 302fa7b..9248473 100644
 --- a/kern/vm/addrspace.c
 +++ b/kern/vm/addrspace.c
 @@ -32,7 +32,10 @@
@@ -10348,7 +10436,7 @@ index 302fa7b..356078a 100644
  	return as;
  }
  
-@@ -66,12 +72,36 @@ as_copy(struct addrspace *old, struct addrspace **ret)
+@@ -66,34 +72,97 @@ as_copy(struct addrspace *old, struct addrspace **ret)
  		return ENOMEM;
  	}
  
@@ -10360,37 +10448,41 @@ index 302fa7b..356078a 100644
 +	{
 +		if(old->uberArray[i] != NULL)
 +		{
-+			as_init_uberarray_section(newas, i);
++			if(newas->uberArray[i] == NULL)
++				as_init_uberarray_section(newas, i);
 +			for(int j=0; j<NUM_SUBPAGES; j++)
 +			{
 +				if(old->uberArray[i][j] != NULL)
 +				{
 +					//allocate user page
-+
-+					newas->uberArray[i][j] = kmalloc(sizeof(struct virtualpage));
++					KASSERT(newas->uberArray[i][j] == NULL);
++					newas->uberArray[i][j] = as_init_virtualpage();
 +					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 +					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
 +					if(old->uberArray[i][j]->coremapindex != -1)
 +					{
 +						int32_t address = allocate_userpage(newas);
++						memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
 +						if(address == -1)
 +							KASSERT(!"User page allocation must not fail");
 +						newas->uberArray[i][j]->coremapindex = address;
 +						//memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
-+						memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
++						copy_page(address, old->uberArray[i][j]->coremapindex);
 +					}
-+
+ 
+-	(void)old;
+-	
 +				}
 +			}
 +		}
 +	}
- 
--	(void)old;
--	
++	newas->as_heapbase = old->as_heapbase;
++	newas->as_heapend = old->as_heapend;
  	*ret = newas;
++	newas->segmentll = NULL;
  	return 0;
  }
-@@ -79,21 +109,56 @@ as_copy(struct addrspace *old, struct addrspace **ret)
+ 
  void
  as_destroy(struct addrspace *as)
  {
@@ -10408,8 +10500,8 @@ index 302fa7b..356078a 100644
 +				{
 +					if(as->uberArray[i][j]->coremapindex != -1)//there exists a frame corresponding to virtual page, free it
 +					{
-+						g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].state = PAGE_FREE;
-+
++						KASSERT(g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].as == as);
++						free_userpage(as->uberArray[i][j]->coremapindex);
 +					}
 +					if(as->uberArray[i][j]->swapfileoffset != -1)
 +					{
@@ -10442,11 +10534,11 @@ index 302fa7b..356078a 100644
 +	int i, spl;
 +
 +	(void)as;
- 
--	(void)as;  // suppress warning until code gets written
++
 +	/* Disable interrupts on this CPU while frobbing the TLB. */
 +	spl = splhigh();
-+
+ 
+-	(void)as;  // suppress warning until code gets written
 +	for (i=0; i<NUM_TLB; i++) {
 +		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
 +	}
@@ -10455,16 +10547,16 @@ index 302fa7b..356078a 100644
  }
  
  /*
-@@ -108,27 +173,91 @@ as_activate(struct addrspace *as)
+@@ -108,27 +177,91 @@ as_activate(struct addrspace *as)
   */
  int
  as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
 -		 int readable, int writeable, int executable)
 +		int readable, int writeable, int executable)
  {
- 	/*
- 	 * Write this.
- 	 */
+-	/*
+-	 * Write this.
+-	 */
 +	int uberindex = VADDR_TO_UBERINDEX(vaddr);
 +	int subindex = VADDR_TO_SUBINDEX(vaddr);
 +	int8_t permission = (readable) | (writeable) | (executable);
@@ -10478,7 +10570,6 @@ index 302fa7b..356078a 100644
 -	return EUNIMP;
 +	uint32_t bytesfromstart = (sz + (vaddr & 0xFFF));
 +	uint32_t numpages = BYTES_TO_PAGES(bytesfromstart);	// vaddr & 0xFFF is necessary because loadelf may define region from middle of page so if we compute just with size we may not allocate enough
-+	//struct virtualpage * vpages = kmalloc(numpages * sizeof(struct virtualpage));
 +	for(uint32_t i=0; i < numpages; i ++)
 +	{
 +		if(as->uberArray[uberindex] == NULL)
@@ -10490,10 +10581,8 @@ index 302fa7b..356078a 100644
 +		{
 +			return EFAULT;	//address already in use
 +		}
-+		as->uberArray[uberindex][subindex] = kmalloc(sizeof(struct virtualpage));
-+		as->uberArray[uberindex][subindex]->coremapindex = -1;
-+		as->uberArray[uberindex][subindex]->swapfileoffset = -1;
-+		as->uberArray[uberindex][subindex]->permission = (int8_t)0x7;
++		as->uberArray[uberindex][subindex] = as_init_virtualpage();
++		as->uberArray[uberindex][subindex]->permission = (int8_t)0x2;
 +
 +		subindex++;
 +		if(subindex >= NUM_SUBPAGES)
@@ -10538,6 +10627,9 @@ index 302fa7b..356078a 100644
 -	 * Write this.
 -	 */
 +
++/*
++
++
 +	for(int i=0; i<NUM_UBERPAGES; i++)
 +	{
 +		if(as->uberArray[i] != NULL)
@@ -10548,6 +10640,8 @@ index 302fa7b..356078a 100644
 +				{
 +					//allocate user page
 +					int32_t address = allocate_userpage(as);
++					memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
++
 +					if(address == -1)
 +						KASSERT(!"User page allocation must not fail");
 +					as->uberArray[i][j]->coremapindex = address;
@@ -10555,10 +10649,11 @@ index 302fa7b..356078a 100644
 +			}
 +		}
 +	}
++*/
  
  	(void)as;
  	return 0;
-@@ -137,10 +266,22 @@ as_prepare_load(struct addrspace *as)
+@@ -137,10 +270,22 @@ as_prepare_load(struct addrspace *as)
  int
  as_complete_load(struct addrspace *as)
  {
@@ -10566,7 +10661,7 @@ index 302fa7b..356078a 100644
 -	 * Write this.
 -	 */
 -
-+	/*struct segment *tmp;
++	struct segment *tmp;
 +	for(tmp = as->segmentll; tmp!=NULL; tmp=tmp->next)
 +	{
 +		uint32_t uberindex = VADDR_TO_UBERINDEX(tmp->startaddress);
@@ -10581,11 +10676,11 @@ index 302fa7b..356078a 100644
 +				uberindex++;
 +			}
 +		}
-+	}*/
++	}
  	(void)as;
  	return 0;
  }
-@@ -156,7 +297,16 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
+@@ -156,7 +301,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
  
  	/* Initial user-level stack pointer */
  	*stackptr = USERSTACK;
@@ -10603,6 +10698,15 @@ index 302fa7b..356078a 100644
 +		as->uberArray[index][i] = NULL;
 +	}
 +}
++
++struct virtualpage* as_init_virtualpage()
++{
++	struct virtualpage *page = kmalloc(sizeof(struct virtualpage));
++	page->coremapindex = -1;
++	page->swapfileoffset = -1;
++	page->permission = 0;
++	return page;
++}
 diff --git a/kern/vm/kmalloc.c b/kern/vm/kmalloc.c
 index 09b764b..ea6438d 100644
 --- a/kern/vm/kmalloc.c
@@ -10618,10 +10722,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/kern/vm/smartvm.c b/kern/vm/smartvm.c
 new file mode 100644
-index 0000000..39d87b0
+index 0000000..dddf9f2
 --- /dev/null
 +++ b/kern/vm/smartvm.c
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,396 @@
 +/*
 + * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
 + *	The President and Fellows of Harvard College.
@@ -10767,7 +10871,7 @@ index 0000000..39d87b0
 +
 +	uint32_t i=0;
 +	int count = 0;
-+	while(i< g_coremap.numpages - npages)
++	while(i< g_coremap.numpages)
 +	{
 +		if(g_coremap.physicalpages[i].state == PAGE_FREE)
 +		{
@@ -10800,6 +10904,7 @@ index 0000000..39d87b0
 +
 +int32_t allocate_userpage(struct addrspace* as)
 +{
++	KASSERT(as != NULL);
 +	spinlock_acquire(&spinlkcore);
 +	for(uint32_t i=0;i<g_coremap.numpages;i++)
 +	{
@@ -10809,6 +10914,7 @@ index 0000000..39d87b0
 +			g_coremap.physicalpages[i].state = PAGE_DIRTY;
 +			g_coremap.physicalpages[i].as = as;
 +			spinlock_release(&spinlkcore);
++			memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
 +			return (int32_t)i;
 +		}
 +	}
@@ -10820,24 +10926,58 @@ index 0000000..39d87b0
 +	return -1;
 +}
 +
++void free_userpage(int32_t index)
++{
++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FREE);
++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED);
++	//KASSERT(g_coremap.physicalpages[index].pa )
++	spinlock_acquire(&spinlkcore);
++	g_coremap.physicalpages[index].numallocations = 0;
++	g_coremap.physicalpages[index].state = PAGE_FREE;
++	g_coremap.physicalpages[index].as = NULL;
++	//memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[index].pa), 0, PAGE_SIZE );
++	spinlock_release(&spinlkcore);
++}
++
++void* memset(void *ptr, int ch, size_t len)
++{
++	char *p = ptr;
++	size_t i;
++
++	for (i=0; i<len; i++) {
++		p[i] = ch;
++	}
++
++	return ptr;
++}
++
 +void
 +free_kpages(vaddr_t kaddr)
 +{
-+
-+	if(g_coremap.bisbootstrapdone == false)
++	if(g_coremap.bisbootstrapdone == false || KVADDR_TO_PADDR(kaddr) < g_coremap.freeaddr)
 +		return ;// leak memory for memsteals
-+
++	KASSERT(kaddr % PAGE_SIZE == 0);
 +	paddr_t addr = KVADDR_TO_PADDR(kaddr);
 +	spinlock_acquire(&spinlkcore);
 +
 +	int startindex = addr/PAGE_SIZE;
++	KASSERT(g_coremap.physicalpages[startindex].numallocations != 0);
 +	KASSERT(startindex + g_coremap.physicalpages[startindex].numallocations < g_coremap.numpages);
 +	for(uint32_t i=startindex; i< startindex + g_coremap.physicalpages[startindex].numallocations; i++ )
 +	{
 +		KASSERT(g_coremap.physicalpages[i].state != PAGE_FREE);
++		KASSERT(g_coremap.physicalpages[i].state == PAGE_FIXED);
 +		g_coremap.physicalpages[i].state = PAGE_FREE;
 +		g_coremap.physicalpages[i].as = NULL;
++		//memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
 +	}
++	spinlock_release(&spinlkcore);
++}
++
++void copy_page(int32_t dst, int32_t src)
++{
++	spinlock_acquire(&spinlkcore);
++	memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[dst].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[src].pa), PAGE_SIZE);
 +	spinlock_release(&spinlkcore);
 +}
 +
@@ -10877,9 +11017,9 @@ index 0000000..39d87b0
 +	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
 +
 +
-+	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX)
++	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
 +		return EFAULT;
-+	if(uberIndex < STACK_MAX)
++	if(uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
 +	{
 +		switch (faulttype) {
 +		case VM_FAULT_READONLY:
@@ -10913,10 +11053,24 @@ index 0000000..39d87b0
 +		}
 +		if(as->uberArray[uberIndex][subIndex] == NULL)
 +		{
-+			as->uberArray[uberIndex][subIndex] = kmalloc(sizeof(struct virtualpage));
-+			as->uberArray[uberIndex][subIndex]->coremapindex = -1;
-+			as->uberArray[uberIndex][subIndex]->swapfileoffset = -1;
-+			as->uberArray[uberIndex][subIndex]->permission = 0x7;
++			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
++			as->uberArray[uberIndex][subIndex]->permission = 0x6;
++			int index = allocate_userpage(as);
++			as->uberArray[uberIndex][subIndex]->coremapindex = index;
++		}
++		if(as->as_sttop < faultaddress)
++			as->as_sttop = faultaddress;
++	}
++	else if(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend)
++	{
++		if(as->uberArray[uberIndex]==NULL)
++		{
++			as_init_uberarray_section(as, uberIndex);
++		}
++		if(as->uberArray[uberIndex][subIndex] == NULL)
++		{
++			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
++			as->uberArray[uberIndex][subIndex]->permission = 0x6;
 +			int index = allocate_userpage(as);
 +			as->uberArray[uberIndex][subIndex]->coremapindex = index;
 +		}
@@ -10933,8 +11087,10 @@ index 0000000..39d87b0
 +	paddr=g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].pa;
 +
 +
-+
-+
++	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].state != PAGE_FREE);
++	//if(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != as)
++	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == as || g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == NULL);
++	//KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex]);
 +	//KASSERT((paddr & PAGE_FRAME) == paddr);
 +
 +	// Disable interrupts on this CPU while frobbing the TLB.
@@ -10968,10 +11124,10 @@ index 0000000..39d87b0
 +}
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..9cef095
+index 0000000..6533941
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,10904 @@
+@@ -0,0 +1,11003 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -10986,14 +11142,14 @@ index 0000000..9cef095
 +  * MIPS exception codes.
 +  */
 +diff --git a/kern/arch/mips/include/vm.h b/kern/arch/mips/include/vm.h
-+index af393c7..32229ea 100644
++index af393c7..ac90d19 100644
 +--- a/kern/arch/mips/include/vm.h
 ++++ b/kern/arch/mips/include/vm.h
 +@@ -30,7 +30,12 @@
 + #ifndef _MIPS_VM_H_
 + #define _MIPS_VM_H_
 + 
-++typedef uint32_t page_state_t;
+++typedef uint8_t page_state_t;
 + 
 ++#define PAGE_FREE 0
 ++#define PAGE_CLEAN 1
@@ -11024,7 +11180,7 @@ index 0000000..9cef095
 + /*
 +  * The top of user space. (Actually, the address immediately above the
 +  * last valid user address.)
-+@@ -116,7 +136,46 @@ struct tlbshootdown {
++@@ -116,7 +136,51 @@ struct tlbshootdown {
 + 	vaddr_t ts_vaddr;
 + };
 + 
@@ -11034,11 +11190,16 @@ index 0000000..9cef095
 ++paddr_t allocate_onepage(void);
 ++paddr_t allocate_multiplepages(int npages);
 ++int32_t allocate_userpage(struct addrspace*);
+++void free_userpage(int32_t index);
+++void copy_page(int32_t dst, int32_t src);
+++void* memset(void *ptr, int ch, size_t len);
+++
+++
 ++
 ++struct virtualpage
 ++{
 ++	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
-++	off_t swapfileoffset;
+++	int16_t swapfileoffset;
 ++	uint8_t permission;
 ++};
 ++
@@ -11049,8 +11210,8 @@ index 0000000..9cef095
 ++    /* page state */
 ++    page_state_t state;
 ++
-++    uint64_t numallocations;
-++    uint64_t timestamp;
+++    uint32_t numallocations;
+++    //uint64_t timestamp;
 ++    struct addrspace *as;
 ++    //add more stuff here
 ++};
@@ -11088,7 +11249,7 @@ index 0000000..9cef095
 + }
 + 
 +diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
-+index 0f773bd..70b882e 100644
++index 0f773bd..459b7be 100644
 +--- a/kern/arch/mips/syscall/syscall.c
 ++++ b/kern/arch/mips/syscall/syscall.c
 +@@ -35,6 +35,7 @@
@@ -11099,7 +11260,7 @@ index 0000000..9cef095
 + 
 + 
 + /*
-+@@ -96,22 +97,99 @@ syscall(struct trapframe *tf)
++@@ -96,22 +97,103 @@ syscall(struct trapframe *tf)
 + 	 * deal with it except for calls that return other values, 
 + 	 * like write.
 + 	 */
@@ -11108,6 +11269,8 @@ index 0000000..9cef095
 + 	retval = 0;
 ++	int32_t offsethigh, offsetlow;	//offsethigh is the most significant 32bits, offsetlow is the least.
 ++	off_t pos;
+++	uint32_t ret;
+++
 + 
 + 	switch (callno) {
 +-	    case SYS_reboot:
@@ -11154,17 +11317,17 @@ index 0000000..9cef095
 ++
 ++	case SYS_close:
 ++		err = sys_close(tf->tf_a0);
+++		break;
+++
+++	case SYS_dup2:
+++		//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
+++		err = sys_dup2(tf->tf_a0, tf->tf_a1,&retval);
+++
 + 		break;
 + 
 +-	    /* Add stuff here */
 +- 
 +-	    default:
-++	case SYS_dup2:
-++		//DINT UNDERSTAND THE MAN SPECS NEED TO CLARIFY
-++		err = sys_dup2(tf->tf_a0, tf->tf_a1,&retval);
-++
-++		break;
-++
 ++	case SYS_chdir:
 ++		err = sys_chdir((userptr_t) tf->tf_a0);
 ++		break;
@@ -11196,8 +11359,10 @@ index 0000000..9cef095
 ++		err=sys_execv((userptr_t)tf->tf_a0,(userptr_t)tf->tf_a1);
 ++		break;
 ++
-++
-++
+++	case SYS_sbrk:
+++		err = sys_sbrk(tf->tf_a0, &ret);
+++		retval = (int32_t)ret;
+++		break;
 ++		/*****************************************END OF PROCESS SYSTEM CALLS******************/
 ++
 ++		/* Add stuff here */
@@ -11206,7 +11371,7 @@ index 0000000..9cef095
 + 		kprintf("Unknown syscall %d\n", callno);
 + 		err = ENOSYS;
 + 		break;
-+@@ -132,12 +210,12 @@ syscall(struct trapframe *tf)
++@@ -132,12 +214,12 @@ syscall(struct trapframe *tf)
 + 		tf->tf_v0 = retval;
 + 		tf->tf_a3 = 0;      /* signal no error */
 + 	}
@@ -11257,7 +11422,7 @@ index 0000000..9cef095
 + #
 + # Startup and initialization
 +diff --git a/kern/include/addrspace.h b/kern/include/addrspace.h
-+index 6788e97..a5e76bf 100644
++index 6788e97..1983cc3 100644
 +--- a/kern/include/addrspace.h
 ++++ b/kern/include/addrspace.h
 +@@ -40,6 +40,13 @@
@@ -11304,7 +11469,7 @@ index 0000000..9cef095
 + #endif
 + };
 + 
-+@@ -102,14 +115,15 @@ void              as_activate(struct addrspace *);
++@@ -102,14 +115,16 @@ void              as_activate(struct addrspace *);
 + void              as_destroy(struct addrspace *);
 + 
 + int               as_define_region(struct addrspace *as, 
@@ -11321,9 +11486,32 @@ index 0000000..9cef095
 + int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 + 
 ++void as_init_uberarray_section(struct addrspace *as, int index);
+++struct virtualpage* as_init_virtualpage(void);
 + 
 + /*
 +  * Functions in loadelf.c
++diff --git a/kern/include/kern/limits.h b/kern/include/kern/limits.h
++index 3fad3f2..296bf6d 100644
++--- a/kern/include/kern/limits.h
+++++ b/kern/include/kern/limits.h
++@@ -66,7 +66,7 @@
++ #define __PID_MIN       2
++ 
++ /* Max value for a process ID */
++-#define __PID_MAX       32767
+++#define __PID_MAX       64
++ 
++ /* Max bytes for atomic pipe I/O -- see description in the pipe() man page */
++ #define __PIPE_BUF      512
++@@ -91,7 +91,7 @@
++  */
++ 
++ /* Max open files per process */
++-#define __OPEN_MAX      128
+++#define __OPEN_MAX      8
++ 
++ /* Max number of iovec structures at once for readv/writev/preadv/pwritev */
++ #define __IOV_MAX       1024
 +diff --git a/kern/include/synch.h b/kern/include/synch.h
 +index ac3714b..48e2d18 100644
 +--- a/kern/include/synch.h
@@ -11363,10 +11551,10 @@ index 0000000..9cef095
 + 
 + struct rwlock * rwlock_create(const char *);
 +diff --git a/kern/include/syscall.h b/kern/include/syscall.h
-+index befd3d8..7cab4e4 100644
++index befd3d8..b36b02a 100644
 +--- a/kern/include/syscall.h
 ++++ b/kern/include/syscall.h
-+@@ -58,4 +58,23 @@ void enter_new_process(int argc, userptr_t argv, vaddr_t stackptr,
++@@ -58,4 +58,24 @@ void enter_new_process(int argc, userptr_t argv, vaddr_t stackptr,
 + int sys_reboot(int code);
 + int sys___time(userptr_t user_seconds, userptr_t user_nanoseconds);
 + 
@@ -11386,6 +11574,7 @@ index 0000000..9cef095
 ++int sys_execv(userptr_t program, userptr_t args);
 ++int sys_waitpid(pid_t pid, userptr_t status, int options,int*, int);
 ++void sys_exit(int exitcode);
+++int sys_sbrk(intptr_t amt, vaddr_t *retval);
 ++
 ++void child_fork(void* data1, unsigned long data2);
 ++
@@ -19924,10 +20113,10 @@ index 0000000..9cef095
 ++}
 +diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 +new file mode 100644
-+index 0000000..a44f3bc
++index 0000000..ad966b9
 +--- /dev/null
 ++++ b/kern/syscall/proc_syscalls.c
-+@@ -0,0 +1,508 @@
++@@ -0,0 +1,563 @@
 ++#include <types.h>
 ++#include <syscall.h>
 ++#include <kern/errno.h>
@@ -20083,7 +20272,7 @@ index 0000000..9cef095
 ++		return err;
 ++	P(s);
 ++	*pid = *(msg->pid);
-++	kfree(msg->sem);
+++	sem_destroy(msg->sem);
 ++	kfree(msg->pid);
 ++	kfree(msg);
 ++
@@ -20436,6 +20625,61 @@ index 0000000..9cef095
 ++	lock_release(g_lk_pid);
 ++	return ENPROC;
 ++}
+++
+++/*
+++ *
+++ * Name
+++sbrk - set process break (allocate memory)
+++Library
+++Standard C Library (libc, -lc)
+++Synopsis
+++#include <unistd.h>
+++
+++void *
+++sbrk(intptr_t amount);
+++Description
+++The "break" is the end address of a process's heap region. The sbrk call adjusts the "break" by the amount amount. It returns the old "break". Thus, to determine the current "break", call sbrk(0).
+++
+++The heap region is initially empty, so at process startup, the beginning of the heap region is the same as the end and may thus be retrieved using sbrk(0).
+++
+++In OS/161, the initial "break" must be page-aligned, and sbrk only need support values of amount that result in page-aligned "break" addresses. Other values of amount may be rejected. (This may simplify the implementation. On the other hand, you may choose to support unaligned values anyway, as that may simplify your malloc code.)
+++
+++Traditionally, the initial "break" is specifically defined to be the end of the BSS (uninitialized data) region, and any amount, page-aligned or not, may legally be used with sbrk.
+++
+++Ordinarily, user-level code should call malloc for memory allocation. The sbrk interface is intended only to be the back-end interface for malloc. Mixing calls to malloc and sbrk will likely confuse malloc and produces undefined behavior.
+++
+++While one can lower the "break" by passing negative values of amount, one may not set the end of the heap to an address lower than the beginning of the heap. Attempts to do so must be rejected.
+++
+++Return Values
+++On success, sbrk returns the previous value of the "break". On error, ((void *)-1) is returned, and errno is set according to the error encountered.
+++Errors
+++The following error codes should be returned under the conditions given. Other error codes may be returned for other errors not mentioned here.
+++
+++
+++    ENOMEM		Sufficient virtual memory to satisfy the request was not available, or the process has reached the limit of the memory it is allowed to allocate.
+++    EINVAL		The request would move the "break" below its initial value.
+++
+++Restrictions
+++While you can return pages that happen to be at the end of the heap to the system, there is no way to use the sbrk interface to return unused pages in the middle of the heap. If you wish to do this, you will need to design a new or supplemental interface.
+++
+++*/
+++
+++int sys_sbrk(intptr_t amt, vaddr_t *retval)
+++{
+++	struct addrspace* as = curthread->t_addrspace;
+++	vaddr_t oldaddr = as->as_heapend;
+++	vaddr_t newaddr = as->as_heapend + amt;
+++	if(newaddr < as->as_heapbase)
+++		return EINVAL;
+++	if(newaddr > as->as_sttop)
+++		return ENOMEM;
+++	//need to check for stack passing
+++	as->as_heapend = newaddr;
+++	*retval = oldaddr;
+++	return 0;
+++}
+++
+++
 +diff --git a/kern/syscall/runprogram.c b/kern/syscall/runprogram.c
 +index a6f45c8..0246a1e 100644
 +--- a/kern/syscall/runprogram.c
@@ -21289,7 +21533,7 @@ index 0000000..9cef095
 +  * Does most of the work for readlink().
 +  *
 +diff --git a/kern/vm/addrspace.c b/kern/vm/addrspace.c
-+index 302fa7b..356078a 100644
++index 302fa7b..9248473 100644
 +--- a/kern/vm/addrspace.c
 ++++ b/kern/vm/addrspace.c
 +@@ -32,7 +32,10 @@
@@ -21322,7 +21566,7 @@ index 0000000..9cef095
 + 	return as;
 + }
 + 
-+@@ -66,12 +72,36 @@ as_copy(struct addrspace *old, struct addrspace **ret)
++@@ -66,34 +72,97 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 + 		return ENOMEM;
 + 	}
 + 
@@ -21334,37 +21578,41 @@ index 0000000..9cef095
 ++	{
 ++		if(old->uberArray[i] != NULL)
 ++		{
-++			as_init_uberarray_section(newas, i);
+++			if(newas->uberArray[i] == NULL)
+++				as_init_uberarray_section(newas, i);
 ++			for(int j=0; j<NUM_SUBPAGES; j++)
 ++			{
 ++				if(old->uberArray[i][j] != NULL)
 ++				{
 ++					//allocate user page
-++
-++					newas->uberArray[i][j] = kmalloc(sizeof(struct virtualpage));
+++					KASSERT(newas->uberArray[i][j] == NULL);
+++					newas->uberArray[i][j] = as_init_virtualpage();
 ++					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 ++					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
 ++					if(old->uberArray[i][j]->coremapindex != -1)
 ++					{
 ++						int32_t address = allocate_userpage(newas);
+++						memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
 ++						if(address == -1)
 ++							KASSERT(!"User page allocation must not fail");
 ++						newas->uberArray[i][j]->coremapindex = address;
 ++						//memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
-++						memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
+++						copy_page(address, old->uberArray[i][j]->coremapindex);
 ++					}
-++
++ 
++-	(void)old;
++-	
 ++				}
 ++			}
 ++		}
 ++	}
-+ 
-+-	(void)old;
-+-	
+++	newas->as_heapbase = old->as_heapbase;
+++	newas->as_heapend = old->as_heapend;
 + 	*ret = newas;
+++	newas->segmentll = NULL;
 + 	return 0;
 + }
-+@@ -79,21 +109,56 @@ as_copy(struct addrspace *old, struct addrspace **ret)
++ 
 + void
 + as_destroy(struct addrspace *as)
 + {
@@ -21382,8 +21630,8 @@ index 0000000..9cef095
 ++				{
 ++					if(as->uberArray[i][j]->coremapindex != -1)//there exists a frame corresponding to virtual page, free it
 ++					{
-++						g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].state = PAGE_FREE;
-++
+++						KASSERT(g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].as == as);
+++						free_userpage(as->uberArray[i][j]->coremapindex);
 ++					}
 ++					if(as->uberArray[i][j]->swapfileoffset != -1)
 ++					{
@@ -21416,11 +21664,11 @@ index 0000000..9cef095
 ++	int i, spl;
 ++
 ++	(void)as;
-+ 
-+-	(void)as;  // suppress warning until code gets written
+++
 ++	/* Disable interrupts on this CPU while frobbing the TLB. */
 ++	spl = splhigh();
-++
++ 
++-	(void)as;  // suppress warning until code gets written
 ++	for (i=0; i<NUM_TLB; i++) {
 ++		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
 ++	}
@@ -21429,16 +21677,16 @@ index 0000000..9cef095
 + }
 + 
 + /*
-+@@ -108,27 +173,91 @@ as_activate(struct addrspace *as)
++@@ -108,27 +177,91 @@ as_activate(struct addrspace *as)
 +  */
 + int
 + as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
 +-		 int readable, int writeable, int executable)
 ++		int readable, int writeable, int executable)
 + {
-+ 	/*
-+ 	 * Write this.
-+ 	 */
++-	/*
++-	 * Write this.
++-	 */
 ++	int uberindex = VADDR_TO_UBERINDEX(vaddr);
 ++	int subindex = VADDR_TO_SUBINDEX(vaddr);
 ++	int8_t permission = (readable) | (writeable) | (executable);
@@ -21452,7 +21700,6 @@ index 0000000..9cef095
 +-	return EUNIMP;
 ++	uint32_t bytesfromstart = (sz + (vaddr & 0xFFF));
 ++	uint32_t numpages = BYTES_TO_PAGES(bytesfromstart);	// vaddr & 0xFFF is necessary because loadelf may define region from middle of page so if we compute just with size we may not allocate enough
-++	//struct virtualpage * vpages = kmalloc(numpages * sizeof(struct virtualpage));
 ++	for(uint32_t i=0; i < numpages; i ++)
 ++	{
 ++		if(as->uberArray[uberindex] == NULL)
@@ -21464,10 +21711,8 @@ index 0000000..9cef095
 ++		{
 ++			return EFAULT;	//address already in use
 ++		}
-++		as->uberArray[uberindex][subindex] = kmalloc(sizeof(struct virtualpage));
-++		as->uberArray[uberindex][subindex]->coremapindex = -1;
-++		as->uberArray[uberindex][subindex]->swapfileoffset = -1;
-++		as->uberArray[uberindex][subindex]->permission = (int8_t)0x7;
+++		as->uberArray[uberindex][subindex] = as_init_virtualpage();
+++		as->uberArray[uberindex][subindex]->permission = (int8_t)0x2;
 ++
 ++		subindex++;
 ++		if(subindex >= NUM_SUBPAGES)
@@ -21512,6 +21757,9 @@ index 0000000..9cef095
 +-	 * Write this.
 +-	 */
 ++
+++/*
+++
+++
 ++	for(int i=0; i<NUM_UBERPAGES; i++)
 ++	{
 ++		if(as->uberArray[i] != NULL)
@@ -21522,6 +21770,8 @@ index 0000000..9cef095
 ++				{
 ++					//allocate user page
 ++					int32_t address = allocate_userpage(as);
+++					memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
+++
 ++					if(address == -1)
 ++						KASSERT(!"User page allocation must not fail");
 ++					as->uberArray[i][j]->coremapindex = address;
@@ -21529,10 +21779,11 @@ index 0000000..9cef095
 ++			}
 ++		}
 ++	}
+++*/
 + 
 + 	(void)as;
 + 	return 0;
-+@@ -137,10 +266,22 @@ as_prepare_load(struct addrspace *as)
++@@ -137,10 +270,22 @@ as_prepare_load(struct addrspace *as)
 + int
 + as_complete_load(struct addrspace *as)
 + {
@@ -21540,7 +21791,7 @@ index 0000000..9cef095
 +-	 * Write this.
 +-	 */
 +-
-++	/*struct segment *tmp;
+++	struct segment *tmp;
 ++	for(tmp = as->segmentll; tmp!=NULL; tmp=tmp->next)
 ++	{
 ++		uint32_t uberindex = VADDR_TO_UBERINDEX(tmp->startaddress);
@@ -21555,11 +21806,11 @@ index 0000000..9cef095
 ++				uberindex++;
 ++			}
 ++		}
-++	}*/
+++	}
 + 	(void)as;
 + 	return 0;
 + }
-+@@ -156,7 +297,16 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
++@@ -156,7 +301,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 + 
 + 	/* Initial user-level stack pointer */
 + 	*stackptr = USERSTACK;
@@ -21577,6 +21828,15 @@ index 0000000..9cef095
 ++		as->uberArray[index][i] = NULL;
 ++	}
 ++}
+++
+++struct virtualpage* as_init_virtualpage()
+++{
+++	struct virtualpage *page = kmalloc(sizeof(struct virtualpage));
+++	page->coremapindex = -1;
+++	page->swapfileoffset = -1;
+++	page->permission = 0;
+++	return page;
+++}
 +diff --git a/kern/vm/kmalloc.c b/kern/vm/kmalloc.c
 +index 09b764b..ea6438d 100644
 +--- a/kern/vm/kmalloc.c
@@ -21592,10 +21852,10 @@ index 0000000..9cef095
 + 			}
 +diff --git a/kern/vm/smartvm.c b/kern/vm/smartvm.c
 +new file mode 100644
-+index 0000000..39d87b0
++index 0000000..dddf9f2
 +--- /dev/null
 ++++ b/kern/vm/smartvm.c
-+@@ -0,0 +1,344 @@
++@@ -0,0 +1,396 @@
 ++/*
 ++ * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
 ++ *	The President and Fellows of Harvard College.
@@ -21741,7 +22001,7 @@ index 0000000..9cef095
 ++
 ++	uint32_t i=0;
 ++	int count = 0;
-++	while(i< g_coremap.numpages - npages)
+++	while(i< g_coremap.numpages)
 ++	{
 ++		if(g_coremap.physicalpages[i].state == PAGE_FREE)
 ++		{
@@ -21774,6 +22034,7 @@ index 0000000..9cef095
 ++
 ++int32_t allocate_userpage(struct addrspace* as)
 ++{
+++	KASSERT(as != NULL);
 ++	spinlock_acquire(&spinlkcore);
 ++	for(uint32_t i=0;i<g_coremap.numpages;i++)
 ++	{
@@ -21783,6 +22044,7 @@ index 0000000..9cef095
 ++			g_coremap.physicalpages[i].state = PAGE_DIRTY;
 ++			g_coremap.physicalpages[i].as = as;
 ++			spinlock_release(&spinlkcore);
+++			memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
 ++			return (int32_t)i;
 ++		}
 ++	}
@@ -21794,24 +22056,58 @@ index 0000000..9cef095
 ++	return -1;
 ++}
 ++
+++void free_userpage(int32_t index)
+++{
+++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FREE);
+++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED);
+++	//KASSERT(g_coremap.physicalpages[index].pa )
+++	spinlock_acquire(&spinlkcore);
+++	g_coremap.physicalpages[index].numallocations = 0;
+++	g_coremap.physicalpages[index].state = PAGE_FREE;
+++	g_coremap.physicalpages[index].as = NULL;
+++	//memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[index].pa), 0, PAGE_SIZE );
+++	spinlock_release(&spinlkcore);
+++}
+++
+++void* memset(void *ptr, int ch, size_t len)
+++{
+++	char *p = ptr;
+++	size_t i;
+++
+++	for (i=0; i<len; i++) {
+++		p[i] = ch;
+++	}
+++
+++	return ptr;
+++}
+++
 ++void
 ++free_kpages(vaddr_t kaddr)
 ++{
-++
-++	if(g_coremap.bisbootstrapdone == false)
+++	if(g_coremap.bisbootstrapdone == false || KVADDR_TO_PADDR(kaddr) < g_coremap.freeaddr)
 ++		return ;// leak memory for memsteals
-++
+++	KASSERT(kaddr % PAGE_SIZE == 0);
 ++	paddr_t addr = KVADDR_TO_PADDR(kaddr);
 ++	spinlock_acquire(&spinlkcore);
 ++
 ++	int startindex = addr/PAGE_SIZE;
+++	KASSERT(g_coremap.physicalpages[startindex].numallocations != 0);
 ++	KASSERT(startindex + g_coremap.physicalpages[startindex].numallocations < g_coremap.numpages);
 ++	for(uint32_t i=startindex; i< startindex + g_coremap.physicalpages[startindex].numallocations; i++ )
 ++	{
 ++		KASSERT(g_coremap.physicalpages[i].state != PAGE_FREE);
+++		KASSERT(g_coremap.physicalpages[i].state == PAGE_FIXED);
 ++		g_coremap.physicalpages[i].state = PAGE_FREE;
 ++		g_coremap.physicalpages[i].as = NULL;
+++		//memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
 ++	}
+++	spinlock_release(&spinlkcore);
+++}
+++
+++void copy_page(int32_t dst, int32_t src)
+++{
+++	spinlock_acquire(&spinlkcore);
+++	memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[dst].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[src].pa), PAGE_SIZE);
 ++	spinlock_release(&spinlkcore);
 ++}
 ++
@@ -21834,48 +22130,7 @@ index 0000000..9cef095
 ++	paddr_t paddr;
 ++	int i;
 ++	uint32_t ehi, elo;
-++	struct addrspace *as;
-++	int spl;
-++
-++	faultaddress &= PAGE_FRAME;
-++	int uberIndex=VADDR_TO_UBERINDEX(faultaddress);
-++	int subIndex=VADDR_TO_SUBINDEX(faultaddress);
-++	as = curthread->t_addrspace;
-++	if (as == NULL) {
-++
-++		// * No address space set up. This is probably a kernel
-++		// * fault early in boot. Return EFAULT so as to panic
-++		// * instead of getting into an infinite faulting loop.
-++		return EFAULT;
-++	}
-++	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
-++
-++
-++	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX)
-++		return EFAULT;
-++	if(uberIndex < STACK_MAX)
-++	{
-++		switch (faulttype) {
-++		case VM_FAULT_READONLY:
-++			if( (as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
-++				return EFAULT;
-++			break;
-++		case VM_FAULT_READ:
-++			if((as->uberArray[uberIndex][subIndex]->permission & 0x4) == 0)
-++				return EFAULT;
-++			break;
-++		case VM_FAULT_WRITE:
-++			if((as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
-++				return EFAULT;
-++			break;
-++		default:
-++			return EINVAL;
-++		}
-++	}
-++
-++
-++
-++	//if control comes here it means its not a segmentation fault
+++	struct addrspace
 \ No newline at end of file
 diff --git a/user/testbin/badcall/bad_execv.c b/user/testbin/badcall/bad_execv.c
 index 287a678..c0a6588 100644

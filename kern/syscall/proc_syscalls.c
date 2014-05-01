@@ -153,7 +153,7 @@ int sys_fork(struct trapframe *ptf, pid_t *pid)
 		return err;
 	P(s);
 	*pid = *(msg->pid);
-	kfree(msg->sem);
+	sem_destroy(msg->sem);
 	kfree(msg->pid);
 	kfree(msg);
 
@@ -315,6 +315,7 @@ int sys_execv(userptr_t prog, userptr_t argsptr)
 	//Copied to user space
 	kfree(tempArgs);
 	kfree(kargv);
+	kfree(program);
 	/* Warp to user mode. */
 	enter_new_process(argc, (userptr_t)(userAddr),(vaddr_t)(userAddr), entrypoint);
 

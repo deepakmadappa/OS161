@@ -326,6 +326,7 @@ int sys_close(int fd)
 	if(fh->refcount == 0)
 	{
 		vfs_close(fh->fileobject);
+		lock_destroy(fh->lk_fileaccess);
 		kfree(fh);
 	}
 	cur->filetable[fd] = NULL;
