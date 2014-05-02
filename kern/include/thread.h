@@ -129,8 +129,8 @@ struct filehandle
 	off_t offset;
 	struct vnode *fileobject;
 	struct lock* lk_fileaccess;
-	int refcount;
-	int isSeekable;
+	int8_t refcount;
+	int8_t isSeekable;
 };
 
 struct pidentry

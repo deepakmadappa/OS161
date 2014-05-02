@@ -349,6 +349,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	}
 	else if(as->uberArray[uberIndex][subIndex]->coremapindex == -1)
 	{
+		KASSERT(as->uberArray[uberIndex] !=NULL );
+		KASSERT(as->uberArray[uberIndex][subIndex] != NULL);
 		int index = allocate_userpage(as);
 		as->uberArray[uberIndex][subIndex]->coremapindex = index;
 	}
@@ -393,4 +395,13 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	//return EFAULT;
 
 
+}
+void dumpcoremap(void)
+{
+	for(uint32_t i=0; i<g_coremap.numpages; i++)
+	{
+		kprintf("%d", g_coremap.physicalpages[i].state);
+
+	}
+	kprintf("\n");
 }

@@ -71,8 +71,11 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	if (newas==NULL) {
 		return ENOMEM;
 	}
+	//dumpcoremap();
+	//for(int i=0; i< 1000000; i++)
+	//{
 
-	//newas = kmalloc(sizeof(struct addrspace));
+	//}
 	for(int i=0; i<NUM_UBERPAGES; i++)
 	{
 		if(old->uberArray[i] != NULL)

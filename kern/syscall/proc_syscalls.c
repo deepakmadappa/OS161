@@ -273,7 +273,7 @@ int sys_execv(userptr_t prog, userptr_t argsptr)
 	if (result) {
 		return result;
 	}
-
+	as_destroy(curthread->t_addrspace);
 	curthread->t_addrspace = as_create();
 	if (curthread->t_addrspace==NULL) {
 		vfs_close(v);

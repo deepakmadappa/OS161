@@ -29,7 +29,7 @@
 
 #ifndef _MIPS_VM_H_
 #define _MIPS_VM_H_
-
+#include <lib.h>
 typedef uint8_t page_state_t;
 
 #define PAGE_FREE 0
@@ -178,6 +178,7 @@ struct struct_coremap
 	uint32_t numpages;
 	bool bisbootstrapdone;
 }g_coremap;
+void dumpcoremap(void);
 
 //static paddr_t getppages(unsigned long npages);
 
