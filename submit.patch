@@ -12,7 +12,7 @@ index 993b10c..c3c63dd 100644
   * MIPS exception codes.
   */
 diff --git a/kern/arch/mips/include/vm.h b/kern/arch/mips/include/vm.h
-index af393c7..5dd37bd 100644
+index af393c7..86ed9da 100644
 --- a/kern/arch/mips/include/vm.h
 +++ b/kern/arch/mips/include/vm.h
 @@ -29,8 +29,13 @@
@@ -52,7 +52,7 @@ index af393c7..5dd37bd 100644
  /*
   * The top of user space. (Actually, the address immediately above the
   * last valid user address.)
-@@ -116,7 +136,52 @@ struct tlbshootdown {
+@@ -116,7 +136,51 @@ struct tlbshootdown {
  	vaddr_t ts_vaddr;
  };
  
@@ -77,7 +77,6 @@ index af393c7..5dd37bd 100644
 +
 +struct memorypage
 +{
-+    paddr_t pa;
 +
 +    /* page state */
 +    page_state_t state;
@@ -476,7 +475,7 @@ index 240d583..c0c72d2 100644
  void menu(char *argstr);
  
 diff --git a/kern/include/thread.h b/kern/include/thread.h
-index 86706ca..61e02e7 100644
+index 86706ca..823d300 100644
 --- a/kern/include/thread.h
 +++ b/kern/include/thread.h
 @@ -38,6 +38,8 @@
@@ -499,7 +498,7 @@ index 86706ca..61e02e7 100644
  
  	/*
  	 * Public fields
-@@ -112,8 +118,39 @@ struct thread {
+@@ -112,8 +118,37 @@ struct thread {
  	struct vnode *t_cwd;		/* current working directory */
  
  	/* add more here as needed */
@@ -514,8 +513,8 @@ index 86706ca..61e02e7 100644
 +	off_t offset;
 +	struct vnode *fileobject;
 +	struct lock* lk_fileaccess;
-+	int refcount;
-+	int isSeekable;
++	int8_t refcount;
++	int8_t isSeekable;
 +};
 +
 +struct pidentry
@@ -524,8 +523,6 @@ index 86706ca..61e02e7 100644
 +	struct semaphore *sem;
 +	int exitstatus;
 +};
-+
-+struct lock* g_forklock;
 +
 +int createfd(struct thread* thread);
 +
@@ -8989,7 +8986,7 @@ index 0000000..fb94662
 +}
 diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 new file mode 100644
-index 0000000..ad81209
+index 0000000..5adeb1c
 --- /dev/null
 +++ b/kern/syscall/proc_syscalls.c
 @@ -0,0 +1,564 @@
@@ -9125,7 +9122,7 @@ index 0000000..ad81209
 +	//TODO: Currently leaking this part of memory need to fix this
 +	//struct trapframe *tf = kmalloc(sizeof(struct trapframe));
 +	//clonetrapframe(ptf, tf);
-+	lock_acquire(g_forklock);
++
 +	struct addrspace *childas = NULL;
 +	int err = as_copy(curthread->t_addrspace, &childas);	//copy parent address space
 +	if(err)
@@ -10200,7 +10197,7 @@ index 9a7468c..651a2ab 100644
 +	lock_release(rwlk->writelock);
  }
 diff --git a/kern/thread/thread.c b/kern/thread/thread.c
-index e7235e3..7cf26ab 100644
+index e7235e3..ad47a06 100644
 --- a/kern/thread/thread.c
 +++ b/kern/thread/thread.c
 @@ -154,6 +154,9 @@ thread_create(const char *name)
@@ -10232,15 +10229,7 @@ index e7235e3..7cf26ab 100644
  
  	kfree(thread->t_name);
  	kfree(thread);
-@@ -352,6 +358,7 @@ thread_bootstrap(void)
- {
- 	struct cpu *bootcpu;
- 	struct thread *bootthread;
-+	g_forklock = lock_create("forklock");
- 
- 	cpuarray_init(&allcpus);
- 
-@@ -419,7 +426,7 @@ thread_start_cpus(void)
+@@ -419,7 +425,7 @@ thread_start_cpus(void)
  
  	cpu_startup_sem = sem_create("cpu_hatch", 0);
  	mainbus_start_cpus();
@@ -10249,7 +10238,7 @@ index e7235e3..7cf26ab 100644
  	for (i=0; i<cpuarray_num(&allcpus) - 1; i++) {
  		P(cpu_startup_sem);
  	}
-@@ -478,9 +485,9 @@ thread_make_runnable(struct thread *target, bool already_have_lock)
+@@ -478,9 +484,9 @@ thread_make_runnable(struct thread *target, bool already_have_lock)
   */
  int
  thread_fork(const char *name,
@@ -10262,7 +10251,7 @@ index e7235e3..7cf26ab 100644
  {
  	struct thread *newthread;
  
-@@ -523,6 +530,25 @@ thread_fork(const char *name,
+@@ -523,6 +529,25 @@ thread_fork(const char *name,
  	/* Set up the switchframe so entrypoint() gets called */
  	switchframe_init(newthread, entrypoint, data1, data2);
  
@@ -10288,7 +10277,7 @@ index e7235e3..7cf26ab 100644
  	/* Lock the current cpu's run queue and make the new thread runnable */
  	thread_make_runnable(newthread, false);
  
-@@ -587,13 +613,13 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
+@@ -587,13 +612,13 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
  
  	/* Put the thread in the right place. */
  	switch (newstate) {
@@ -10305,7 +10294,7 @@ index e7235e3..7cf26ab 100644
  		cur->t_wchan_name = wc->wc_name;
  		/*
  		 * Add the thread to the list in the wait channel, and
-@@ -611,7 +637,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
+@@ -611,7 +636,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
  		threadlist_addtail(&wc->wc_threads, cur);
  		wchan_unlock(wc);
  		break;
@@ -10314,7 +10303,7 @@ index e7235e3..7cf26ab 100644
  		cur->t_wchan_name = "ZOMBIE";
  		threadlist_addtail(&curcpu->c_zombies, cur);
  		break;
-@@ -736,7 +762,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
+@@ -736,7 +761,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
   */
  void
  thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
@@ -10323,12 +10312,7 @@ index e7235e3..7cf26ab 100644
  {
  	struct thread *cur;
  
-@@ -813,12 +839,13 @@ thread_exit(void)
- 		as_activate(NULL);
- 		as_destroy(as);
- 	}
--
-+	lock_release(g_forklock);
+@@ -817,8 +842,9 @@ thread_exit(void)
  	/* Check the stack guard band. */
  	thread_checkstack(cur);
  
@@ -10339,7 +10323,7 @@ index e7235e3..7cf26ab 100644
  	thread_switch(S_ZOMBIE, NULL);
  	panic("The zombie walks!\n");
  }
-@@ -845,14 +872,14 @@ thread_yield(void)
+@@ -845,14 +871,14 @@ thread_yield(void)
  void
  schedule(void)
  {
@@ -10357,7 +10341,7 @@ index e7235e3..7cf26ab 100644
  }
  #endif
  
-@@ -947,8 +974,8 @@ thread_consider_migration(void)
+@@ -947,8 +973,8 @@ thread_consider_migration(void)
  			t->t_cpu = c;
  			threadlist_addtail(&c->c_runqueue, t);
  			DEBUG(DB_THREADS,
@@ -10368,7 +10352,7 @@ index e7235e3..7cf26ab 100644
  			to_send--;
  			if (c->c_isidle) {
  				/*
-@@ -1201,7 +1228,7 @@ interprocessor_interrupt(void)
+@@ -1201,7 +1227,7 @@ interprocessor_interrupt(void)
  		spinlock_acquire(&curcpu->c_runqueue_lock);
  		if (!curcpu->c_isidle) {
  			kprintf("cpu%d: offline: warning: not idle\n",
@@ -10377,7 +10361,7 @@ index e7235e3..7cf26ab 100644
  		}
  		spinlock_release(&curcpu->c_runqueue_lock);
  		kprintf("cpu%d: offline.\n", curcpu->c_number);
-@@ -1228,3 +1255,5 @@ interprocessor_interrupt(void)
+@@ -1228,3 +1254,5 @@ interprocessor_interrupt(void)
  	curcpu->c_ipi_pending = 0;
  	spinlock_release(&curcpu->c_ipi_lock);
  }
@@ -10423,7 +10407,7 @@ index 3e439c6..2ae3507 100644
   * Does most of the work for readlink().
   *
 diff --git a/kern/vm/addrspace.c b/kern/vm/addrspace.c
-index 302fa7b..701ed9f 100644
+index 302fa7b..9ef4735 100644
 --- a/kern/vm/addrspace.c
 +++ b/kern/vm/addrspace.c
 @@ -32,7 +32,10 @@
@@ -10456,19 +10440,18 @@ index 302fa7b..701ed9f 100644
  	return as;
  }
  
-@@ -65,35 +71,102 @@ as_copy(struct addrspace *old, struct addrspace **ret)
+@@ -65,35 +71,100 @@ as_copy(struct addrspace *old, struct addrspace **ret)
  	if (newas==NULL) {
  		return ENOMEM;
  	}
 +	//dumpcoremap();
-+	//for(int i=0; i< 1000000; i++)
-+	//{
++	for(int i=0; i< 1000000; i++)
++	{
  
 -	/*
 -	 * Write this.
 -	 */
-+	//}
-+	//newas = kmalloc(sizeof(struct addrspace));
++	}
 +	for(int i=0; i<NUM_UBERPAGES; i++)
 +	{
 +		if(old->uberArray[i] != NULL)
@@ -10487,11 +10470,10 @@ index 302fa7b..701ed9f 100644
 +					if(old->uberArray[i][j]->coremapindex != -1)
 +					{
 +						int32_t address = allocate_userpage(newas);
-+						memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
++						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
 +						if(address == -1)
 +							KASSERT(!"User page allocation must not fail");
 +						newas->uberArray[i][j]->coremapindex = address;
-+						//memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
 +						copy_page(address, old->uberArray[i][j]->coremapindex);
 +					}
  
@@ -10557,13 +10539,13 @@ index 302fa7b..701ed9f 100644
 -	 * Write this.
 -	 */
 +	int i, spl;
-+
+ 
+-	(void)as;  // suppress warning until code gets written
 +	(void)as;
 +
 +	/* Disable interrupts on this CPU while frobbing the TLB. */
 +	spl = splhigh();
- 
--	(void)as;  // suppress warning until code gets written
++
 +	for (i=0; i<NUM_TLB; i++) {
 +		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
 +	}
@@ -10572,7 +10554,7 @@ index 302fa7b..701ed9f 100644
  }
  
  /*
-@@ -108,27 +181,91 @@ as_activate(struct addrspace *as)
+@@ -108,27 +179,91 @@ as_activate(struct addrspace *as)
   */
  int
  as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
@@ -10678,7 +10660,7 @@ index 302fa7b..701ed9f 100644
  
  	(void)as;
  	return 0;
-@@ -137,10 +274,22 @@ as_prepare_load(struct addrspace *as)
+@@ -137,10 +272,22 @@ as_prepare_load(struct addrspace *as)
  int
  as_complete_load(struct addrspace *as)
  {
@@ -10705,7 +10687,7 @@ index 302fa7b..701ed9f 100644
  	(void)as;
  	return 0;
  }
-@@ -156,7 +305,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
+@@ -156,7 +303,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
  
  	/* Initial user-level stack pointer */
  	*stackptr = USERSTACK;
@@ -10747,10 +10729,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/kern/vm/smartvm.c b/kern/vm/smartvm.c
 new file mode 100644
-index 0000000..1057a12
+index 0000000..b7ae449
 --- /dev/null
 +++ b/kern/vm/smartvm.c
-@@ -0,0 +1,407 @@
+@@ -0,0 +1,405 @@
 +/*
 + * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
 + *	The President and Fellows of Harvard College.
@@ -10811,12 +10793,10 @@ index 0000000..1057a12
 +	for(i = 0; i< ncpages; i++)
 +	{
 +		g_coremap.physicalpages[i].state = PAGE_FIXED;
-+		g_coremap.physicalpages[i].pa = i * PAGE_SIZE;
 +	}
 +	for(;i<g_coremap.numpages;i++)
 +	{
 +		g_coremap.physicalpages[i].state = PAGE_FREE;
-+		g_coremap.physicalpages[i].pa = i * PAGE_SIZE;
 +	}
 +	g_coremap.bisbootstrapdone = true;
 +
@@ -10883,7 +10863,7 @@ index 0000000..1057a12
 +		{
 +			g_coremap.physicalpages[i].numallocations = 1;
 +			g_coremap.physicalpages[i].state = PAGE_FIXED;
-+			return g_coremap.physicalpages[i].pa;
++			return (i*PAGE_SIZE);
 +		}
 +	}
 +	panic("there is no free page");
@@ -10924,7 +10904,7 @@ index 0000000..1057a12
 +		//TODO:Need to call evict here and make enuf room
 +	}
 +	g_coremap.physicalpages[i-npages +1].numallocations = npages;
-+	return g_coremap.physicalpages[i-npages +1].pa;
++	return (PAGE_SIZE * (i-npages +1));
 +}
 +
 +int32_t allocate_userpage(struct addrspace* as)
@@ -10939,7 +10919,7 @@ index 0000000..1057a12
 +			g_coremap.physicalpages[i].state = PAGE_DIRTY;
 +			g_coremap.physicalpages[i].as = as;
 +			spinlock_release(&spinlkcore);
-+			memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
++			memset((void *)PADDR_TO_KVADDR(i * PAGE_SIZE), 0, PAGE_SIZE );
 +			return (int32_t)i;
 +		}
 +	}
@@ -11002,7 +10982,7 @@ index 0000000..1057a12
 +void copy_page(int32_t dst, int32_t src)
 +{
 +	spinlock_acquire(&spinlkcore);
-+	memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[dst].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[src].pa), PAGE_SIZE);
++	memcpy( (char*)PADDR_TO_KVADDR(PAGE_SIZE * dst), (char*)PADDR_TO_KVADDR(src * PAGE_SIZE), PAGE_SIZE);
 +	spinlock_release(&spinlkcore);
 +}
 +
@@ -11111,7 +11091,7 @@ index 0000000..1057a12
 +	//we will check if the virtual page is in coremap or not....right now we are assuming it is in coremap.
 +
 +	KASSERT(as->uberArray[uberIndex][subIndex]->coremapindex != -1);
-+	paddr=g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].pa;
++	paddr= PAGE_SIZE * as->uberArray[uberIndex][subIndex]->coremapindex;
 +
 +
 +	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].state != PAGE_FREE);
@@ -11160,10 +11140,10 @@ index 0000000..1057a12
 +}
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..413b083
+index 0000000..184c18f
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,11131 @@
+@@ -0,0 +1,11017 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -11178,7 +11158,7 @@ index 0000000..413b083
 +  * MIPS exception codes.
 +  */
 +diff --git a/kern/arch/mips/include/vm.h b/kern/arch/mips/include/vm.h
-+index af393c7..5dd37bd 100644
++index af393c7..86ed9da 100644
 +--- a/kern/arch/mips/include/vm.h
 ++++ b/kern/arch/mips/include/vm.h
 +@@ -29,8 +29,13 @@
@@ -11218,7 +11198,7 @@ index 0000000..413b083
 + /*
 +  * The top of user space. (Actually, the address immediately above the
 +  * last valid user address.)
-+@@ -116,7 +136,52 @@ struct tlbshootdown {
++@@ -116,7 +136,51 @@ struct tlbshootdown {
 + 	vaddr_t ts_vaddr;
 + };
 + 
@@ -11243,7 +11223,6 @@ index 0000000..413b083
 ++
 ++struct memorypage
 ++{
-++    paddr_t pa;
 ++
 ++    /* page state */
 ++    page_state_t state;
@@ -11642,7 +11621,7 @@ index 0000000..413b083
 + void menu(char *argstr);
 + 
 +diff --git a/kern/include/thread.h b/kern/include/thread.h
-+index 86706ca..61e02e7 100644
++index 86706ca..823d300 100644
 +--- a/kern/include/thread.h
 ++++ b/kern/include/thread.h
 +@@ -38,6 +38,8 @@
@@ -11665,7 +11644,7 @@ index 0000000..413b083
 + 
 + 	/*
 + 	 * Public fields
-+@@ -112,8 +118,39 @@ struct thread {
++@@ -112,8 +118,37 @@ struct thread {
 + 	struct vnode *t_cwd;		/* current working directory */
 + 
 + 	/* add more here as needed */
@@ -11680,8 +11659,8 @@ index 0000000..413b083
 ++	off_t offset;
 ++	struct vnode *fileobject;
 ++	struct lock* lk_fileaccess;
-++	int refcount;
-++	int isSeekable;
+++	int8_t refcount;
+++	int8_t isSeekable;
 ++};
 ++
 ++struct pidentry
@@ -11690,8 +11669,6 @@ index 0000000..413b083
 ++	struct semaphore *sem;
 ++	int exitstatus;
 ++};
-++
-++struct lock* g_forklock;
 ++
 ++int createfd(struct thread* thread);
 ++
@@ -20155,7 +20132,7 @@ index 0000000..413b083
 ++}
 +diff --git a/kern/syscall/proc_syscalls.c b/kern/syscall/proc_syscalls.c
 +new file mode 100644
-+index 0000000..ad81209
++index 0000000..5adeb1c
 +--- /dev/null
 ++++ b/kern/syscall/proc_syscalls.c
 +@@ -0,0 +1,564 @@
@@ -20291,7 +20268,7 @@ index 0000000..413b083
 ++	//TODO: Currently leaking this part of memory need to fix this
 ++	//struct trapframe *tf = kmalloc(sizeof(struct trapframe));
 ++	//clonetrapframe(ptf, tf);
-++	lock_acquire(g_forklock);
+++
 ++	struct addrspace *childas = NULL;
 ++	int err = as_copy(curthread->t_addrspace, &childas);	//copy parent address space
 ++	if(err)
@@ -21366,7 +21343,7 @@ index 0000000..413b083
 ++	lock_release(rwlk->writelock);
 + }
 +diff --git a/kern/thread/thread.c b/kern/thread/thread.c
-+index e7235e3..7cf26ab 100644
++index e7235e3..ad47a06 100644
 +--- a/kern/thread/thread.c
 ++++ b/kern/thread/thread.c
 +@@ -154,6 +154,9 @@ thread_create(const char *name)
@@ -21398,15 +21375,7 @@ index 0000000..413b083
 + 
 + 	kfree(thread->t_name);
 + 	kfree(thread);
-+@@ -352,6 +358,7 @@ thread_bootstrap(void)
-+ {
-+ 	struct cpu *bootcpu;
-+ 	struct thread *bootthread;
-++	g_forklock = lock_create("forklock");
-+ 
-+ 	cpuarray_init(&allcpus);
-+ 
-+@@ -419,7 +426,7 @@ thread_start_cpus(void)
++@@ -419,7 +425,7 @@ thread_start_cpus(void)
 + 
 + 	cpu_startup_sem = sem_create("cpu_hatch", 0);
 + 	mainbus_start_cpus();
@@ -21415,7 +21384,7 @@ index 0000000..413b083
 + 	for (i=0; i<cpuarray_num(&allcpus) - 1; i++) {
 + 		P(cpu_startup_sem);
 + 	}
-+@@ -478,9 +485,9 @@ thread_make_runnable(struct thread *target, bool already_have_lock)
++@@ -478,9 +484,9 @@ thread_make_runnable(struct thread *target, bool already_have_lock)
 +  */
 + int
 + thread_fork(const char *name,
@@ -21428,7 +21397,7 @@ index 0000000..413b083
 + {
 + 	struct thread *newthread;
 + 
-+@@ -523,6 +530,25 @@ thread_fork(const char *name,
++@@ -523,6 +529,25 @@ thread_fork(const char *name,
 + 	/* Set up the switchframe so entrypoint() gets called */
 + 	switchframe_init(newthread, entrypoint, data1, data2);
 + 
@@ -21454,7 +21423,7 @@ index 0000000..413b083
 + 	/* Lock the current cpu's run queue and make the new thread runnable */
 + 	thread_make_runnable(newthread, false);
 + 
-+@@ -587,13 +613,13 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
++@@ -587,13 +612,13 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
 + 
 + 	/* Put the thread in the right place. */
 + 	switch (newstate) {
@@ -21471,7 +21440,7 @@ index 0000000..413b083
 + 		cur->t_wchan_name = wc->wc_name;
 + 		/*
 + 		 * Add the thread to the list in the wait channel, and
-+@@ -611,7 +637,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
++@@ -611,7 +636,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
 + 		threadlist_addtail(&wc->wc_threads, cur);
 + 		wchan_unlock(wc);
 + 		break;
@@ -21480,7 +21449,7 @@ index 0000000..413b083
 + 		cur->t_wchan_name = "ZOMBIE";
 + 		threadlist_addtail(&curcpu->c_zombies, cur);
 + 		break;
-+@@ -736,7 +762,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
++@@ -736,7 +761,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
 +  */
 + void
 + thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
@@ -21489,12 +21458,7 @@ index 0000000..413b083
 + {
 + 	struct thread *cur;
 + 
-+@@ -813,12 +839,13 @@ thread_exit(void)
-+ 		as_activate(NULL);
-+ 		as_destroy(as);
-+ 	}
-+-
-++	lock_release(g_forklock);
++@@ -817,8 +842,9 @@ thread_exit(void)
 + 	/* Check the stack guard band. */
 + 	thread_checkstack(cur);
 + 
@@ -21505,7 +21469,7 @@ index 0000000..413b083
 + 	thread_switch(S_ZOMBIE, NULL);
 + 	panic("The zombie walks!\n");
 + }
-+@@ -845,14 +872,14 @@ thread_yield(void)
++@@ -845,14 +871,14 @@ thread_yield(void)
 + void
 + schedule(void)
 + {
@@ -21523,7 +21487,7 @@ index 0000000..413b083
 + }
 + #endif
 + 
-+@@ -947,8 +974,8 @@ thread_consider_migration(void)
++@@ -947,8 +973,8 @@ thread_consider_migration(void)
 + 			t->t_cpu = c;
 + 			threadlist_addtail(&c->c_runqueue, t);
 + 			DEBUG(DB_THREADS,
@@ -21534,7 +21498,7 @@ index 0000000..413b083
 + 			to_send--;
 + 			if (c->c_isidle) {
 + 				/*
-+@@ -1201,7 +1228,7 @@ interprocessor_interrupt(void)
++@@ -1201,7 +1227,7 @@ interprocessor_interrupt(void)
 + 		spinlock_acquire(&curcpu->c_runqueue_lock);
 + 		if (!curcpu->c_isidle) {
 + 			kprintf("cpu%d: offline: warning: not idle\n",
@@ -21543,7 +21507,7 @@ index 0000000..413b083
 + 		}
 + 		spinlock_release(&curcpu->c_runqueue_lock);
 + 		kprintf("cpu%d: offline.\n", curcpu->c_number);
-+@@ -1228,3 +1255,5 @@ interprocessor_interrupt(void)
++@@ -1228,3 +1254,5 @@ interprocessor_interrupt(void)
 + 	curcpu->c_ipi_pending = 0;
 + 	spinlock_release(&curcpu->c_ipi_lock);
 + }
@@ -21589,7 +21553,7 @@ index 0000000..413b083
 +  * Does most of the work for readlink().
 +  *
 +diff --git a/kern/vm/addrspace.c b/kern/vm/addrspace.c
-+index 302fa7b..701ed9f 100644
++index 302fa7b..9ef4735 100644
 +--- a/kern/vm/addrspace.c
 ++++ b/kern/vm/addrspace.c
 +@@ -32,7 +32,10 @@
@@ -21622,19 +21586,18 @@ index 0000000..413b083
 + 	return as;
 + }
 + 
-+@@ -65,35 +71,102 @@ as_copy(struct addrspace *old, struct addrspace **ret)
++@@ -65,35 +71,100 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 + 	if (newas==NULL) {
 + 		return ENOMEM;
 + 	}
 ++	//dumpcoremap();
-++	//for(int i=0; i< 1000000; i++)
-++	//{
+++	for(int i=0; i< 1000000; i++)
+++	{
 + 
 +-	/*
 +-	 * Write this.
 +-	 */
-++	//}
-++	//newas = kmalloc(sizeof(struct addrspace));
+++	}
 ++	for(int i=0; i<NUM_UBERPAGES; i++)
 ++	{
 ++		if(old->uberArray[i] != NULL)
@@ -21653,11 +21616,10 @@ index 0000000..413b083
 ++					if(old->uberArray[i][j]->coremapindex != -1)
 ++					{
 ++						int32_t address = allocate_userpage(newas);
-++						memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
+++						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
 ++						if(address == -1)
 ++							KASSERT(!"User page allocation must not fail");
 ++						newas->uberArray[i][j]->coremapindex = address;
-++						//memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
 ++						copy_page(address, old->uberArray[i][j]->coremapindex);
 ++					}
 + 
@@ -21723,13 +21685,13 @@ index 0000000..413b083
 +-	 * Write this.
 +-	 */
 ++	int i, spl;
-++
++ 
++-	(void)as;  // suppress warning until code gets written
 ++	(void)as;
 ++
 ++	/* Disable interrupts on this CPU while frobbing the TLB. */
 ++	spl = splhigh();
-+ 
-+-	(void)as;  // suppress warning until code gets written
+++
 ++	for (i=0; i<NUM_TLB; i++) {
 ++		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
 ++	}
@@ -21738,7 +21700,7 @@ index 0000000..413b083
 + }
 + 
 + /*
-+@@ -108,27 +181,91 @@ as_activate(struct addrspace *as)
++@@ -108,27 +179,91 @@ as_activate(struct addrspace *as)
 +  */
 + int
 + as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
@@ -21844,7 +21806,7 @@ index 0000000..413b083
 + 
 + 	(void)as;
 + 	return 0;
-+@@ -137,10 +274,22 @@ as_prepare_load(struct addrspace *as)
++@@ -137,10 +272,22 @@ as_prepare_load(struct addrspace *as)
 + int
 + as_complete_load(struct addrspace *as)
 + {
@@ -21871,7 +21833,7 @@ index 0000000..413b083
 + 	(void)as;
 + 	return 0;
 + }
-+@@ -156,7 +305,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
++@@ -156,7 +303,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 + 
 + 	/* Initial user-level stack pointer */
 + 	*stackptr = USERSTACK;
@@ -21913,10 +21875,10 @@ index 0000000..413b083
 + 			}
 +diff --git a/kern/vm/smartvm.c b/kern/vm/smartvm.c
 +new file mode 100644
-+index 0000000..1057a12
++index 0000000..b7ae449
 +--- /dev/null
 ++++ b/kern/vm/smartvm.c
-+@@ -0,0 +1,407 @@
++@@ -0,0 +1,405 @@
 ++/*
 ++ * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
 ++ *	The President and Fellows of Harvard College.
@@ -21977,12 +21939,10 @@ index 0000000..413b083
 ++	for(i = 0; i< ncpages; i++)
 ++	{
 ++		g_coremap.physicalpages[i].state = PAGE_FIXED;
-++		g_coremap.physicalpages[i].pa = i * PAGE_SIZE;
 ++	}
 ++	for(;i<g_coremap.numpages;i++)
 ++	{
 ++		g_coremap.physicalpages[i].state = PAGE_FREE;
-++		g_coremap.physicalpages[i].pa = i * PAGE_SIZE;
 ++	}
 ++	g_coremap.bisbootstrapdone = true;
 ++
@@ -22049,7 +22009,7 @@ index 0000000..413b083
 ++		{
 ++			g_coremap.physicalpages[i].numallocations = 1;
 ++			g_coremap.physicalpages[i].state = PAGE_FIXED;
-++			return g_coremap.physicalpages[i].pa;
+++			return (i*PAGE_SIZE);
 ++		}
 ++	}
 ++	panic("there is no free page");
@@ -22090,7 +22050,7 @@ index 0000000..413b083
 ++		//TODO:Need to call evict here and make enuf room
 ++	}
 ++	g_coremap.physicalpages[i-npages +1].numallocations = npages;
-++	return g_coremap.physicalpages[i-npages +1].pa;
+++	return (PAGE_SIZE * (i-npages +1));
 ++}
 ++
 ++int32_t allocate_userpage(struct addrspace* as)
@@ -22105,7 +22065,7 @@ index 0000000..413b083
 ++			g_coremap.physicalpages[i].state = PAGE_DIRTY;
 ++			g_coremap.physicalpages[i].as = as;
 ++			spinlock_release(&spinlkcore);
-++			memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[i].pa), 0, PAGE_SIZE );
+++			memset((void *)PADDR_TO_KVADDR(i * PAGE_SIZE), 0, PAGE_SIZE );
 ++			return (int32_t)i;
 ++		}
 ++	}
@@ -22168,7 +22128,7 @@ index 0000000..413b083
 ++void copy_page(int32_t dst, int32_t src)
 ++{
 ++	spinlock_acquire(&spinlkcore);
-++	memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[dst].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[src].pa), PAGE_SIZE);
+++	memcpy( (char*)PADDR_TO_KVADDR(PAGE_SIZE * dst), (char*)PADDR_TO_KVADDR(src * PAGE_SIZE), PAGE_SIZE);
 ++	spinlock_release(&spinlkcore);
 ++}
 ++
@@ -22200,101 +22160,7 @@ index 0000000..413b083
 ++	as = curthread->t_addrspace;
 ++	if (as == NULL) {
 ++
-++		// * No address space set up. This is probably a kernel
-++		// * fault early in boot. Return EFAULT so as to panic
-++		// * instead of getting into an infinite faulting loop.
-++		return EFAULT;
-++	}
-++	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
-++
-++
-++	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
-++		return EFAULT;
-++	if(uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
-++	{
-++		switch (faulttype) {
-++		case VM_FAULT_READONLY:
-++			if( (as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
-++				return EFAULT;
-++			break;
-++		case VM_FAULT_READ:
-++			if((as->uberArray[uberIndex][subIndex]->permission & 0x4) == 0)
-++				return EFAULT;
-++			break;
-++		case VM_FAULT_WRITE:
-++			if((as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
-++				return EFAULT;
-++			break;
-++		default:
-++			return EINVAL;
-++		}
-++	}
-++
-++
-++
-++	//if control comes here it means its not a segmentation fault
-++	//Address translation-> find paddr
-++
-++	if(uberIndex >= STACK_MAX)
-++	{
-++		//if last 1024 pages just assume its stack.... for now?
-++		if(as->uberArray[uberIndex]==NULL)
-++		{
-++			as_init_uberarray_section(as, uberIndex);
-++		}
-++		if(as->uberArray[uberIndex][subIndex] == NULL)
-++		{
-++			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
-++			as->uberArray[uberIndex][subIndex]->permission = 0x6;
-++			int index = allocate_userpage(as);
-++			as->uberArray[uberIndex][subIndex]->coremapindex = index;
-++		}
-++		if(as->as_sttop < faultaddress)
-++			as->as_sttop = faultaddress;
-++	}
-++	else if(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend)
-++	{
-++		if(as->uberArray[uberIndex]==NULL)
-++		{
-++			as_init_uberarray_section(as, uberIndex);
-++		}
-++		if(as->uberArray[uberIndex][subIndex] == NULL)
-++		{
-++			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
-++			as->uberArray[uberIndex][subIndex]->permission = 0x6;
-++			int index = allocate_userpage(as);
-++			as->uberArray[uberIndex][subIndex]->coremapindex = index;
-++		}
-++	}
-++	else if(as->uberArray[uberIndex][subIndex]->coremapindex == -1)
-++	{
-++		KASSERT(as->uberArray[uberIndex] !=NULL );
-++		KASSERT(as->uberArray[uberIndex][subIndex] != NULL);
-++		int index = allocate_userpage(as);
-++		as->uberArray[uberIndex][subIndex]->coremapindex = index;
-++	}
-++
-++	//we will check if the virtual page is in coremap or not....right now we are assuming it is in coremap.
-++
-++	KASSERT(as->uberArray[uberIndex][subIndex]->coremapindex != -1);
-++	paddr=g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].pa;
-++
-++
-++	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].state != PAGE_FREE);
-++	//if(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != as)
-++	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == as || g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == NULL);
-++	//KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex]);
-++	//KASSERT((paddr & PAGE_FRAME) == paddr);
-++
-++	// Disable interrupts on this CPU while frobbing the TLB.
-++	spl = splhigh();
-++
-++	for (i=0; i<NUM_TLB; i++) {
-++		tlb_read(&ehi, &elo, i);
-++		if (elo & TLBLO_VALID) {
-++			continue;
-++		}
-++		ehi = faultaddress
+++		// * No 
 \ No newline at end of file
 diff --git a/user/testbin/badcall/bad_execv.c b/user/testbin/badcall/bad_execv.c
 index 287a678..c0a6588 100644

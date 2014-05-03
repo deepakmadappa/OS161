@@ -72,10 +72,12 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 		return ENOMEM;
 	}
 	//dumpcoremap();
-	//for(int i=0; i< 1000000; i++)
+	//for(int i=0; i< 10000; i++)
 	//{
-
+//
 	//}
+
+
 	for(int i=0; i<NUM_UBERPAGES; i++)
 	{
 		if(old->uberArray[i] != NULL)
@@ -93,13 +95,27 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
 					if(old->uberArray[i][j]->coremapindex != -1)
 					{
-						int32_t address = allocate_userpage(newas);
-						memset((void *)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), 0, PAGE_SIZE );
+						int32_t address;
+						int err= allocate_userpage(newas, i, j, &address);
+						if(err)
+							return err;
+						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
 						if(address == -1)
 							KASSERT(!"User page allocation must not fail");
 						newas->uberArray[i][j]->coremapindex = address;
-						//memcpy( (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[address].pa), (char*)PADDR_TO_KVADDR(g_coremap.physicalpages[old->uberArray[i][j]->coremapindex].pa), PAGE_SIZE);
 						copy_page(address, old->uberArray[i][j]->coremapindex);
+					}
+					else if(old->uberArray[i][j]->swapfileoffset != -1)
+					{
+						int32_t address;
+						int err= allocate_userpage(newas, i, j, &address);
+						if(err)
+							return err;
+						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
+						if(address == -1)
+							KASSERT(!"User page allocation must not fail");
+						newas->uberArray[i][j]->coremapindex = address;
+						readfromswap(address, old->uberArray[i][j]->swapfileoffset);
 					}
 
 				}
@@ -242,7 +258,7 @@ int
 as_prepare_load(struct addrspace *as)
 {
 
-/*
+	/*
 
 
 	for(int i=0; i<NUM_UBERPAGES; i++)
@@ -264,7 +280,7 @@ as_prepare_load(struct addrspace *as)
 			}
 		}
 	}
-*/
+	 */
 
 	(void)as;
 	return 0;

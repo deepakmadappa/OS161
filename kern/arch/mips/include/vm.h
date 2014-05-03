@@ -141,30 +141,37 @@ struct tlbshootdown {
 
 paddr_t allocate_onepage(void);
 paddr_t allocate_multiplepages(int npages);
-int32_t allocate_userpage(struct addrspace*);
+int allocate_userpage(struct addrspace*, int, int, int32_t*);
 void free_userpage(int32_t index);
 void copy_page(int32_t dst, int32_t src);
 void* memset(void *ptr, int ch, size_t len);
 
-
+int swapin(struct addrspace *as, int uberindex, int subindex);
+int swapout(int32_t *coremapindex);
+int readfromswap(int32_t coremapindex, int32_t swapoffset);
+int writetoswap(int32_t coremapindex, int32_t *swapoffset);
+void evict(int32_t coremapindex);
+int32_t findfreeswapoffset(void);
+int32_t chooseframetoevict(void);
 
 struct virtualpage
 {
 	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
-	int16_t swapfileoffset;
+	int32_t swapfileoffset;
 	uint8_t permission;
 };
 
 struct memorypage
 {
-    paddr_t pa;
 
     /* page state */
     page_state_t state;
 
+
     uint32_t numallocations;
     //uint64_t timestamp;
     struct addrspace *as;
+    vaddr_t vpage;
     //add more stuff here
 };
 
@@ -177,7 +184,17 @@ struct struct_coremap
 	paddr_t lastaddr;
 	uint32_t numpages;
 	bool bisbootstrapdone;
+    int swapcounter;
+
 }g_coremap;
+
+struct struct_swapper
+{
+        struct vnode *swapfile;
+        off_t fileend;
+        struct lock *lk_swapper;
+}g_swapper;
+
 void dumpcoremap(void);
 
 //static paddr_t getppages(unsigned long npages);
