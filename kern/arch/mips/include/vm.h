@@ -36,6 +36,11 @@ typedef uint8_t page_state_t;
 #define PAGE_CLEAN 1
 #define PAGE_DIRTY 2
 #define PAGE_FIXED 3
+
+#define VPAGE_UNINIT 0
+#define VPAGE_INMEMORY 1
+#define VPAGE_INSWAP 2
+
 /*
  * Machine-dependent VM system definitions.
  */
@@ -128,6 +133,8 @@ void ram_getsize(paddr_t *lo, paddr_t *hi);
  * We'll take up to 16 invalidations before just flushing the whole TLB.
  */
 
+typedef uint16_t index_t;
+
 struct tlbshootdown {
 	/*
 	 * Change this to what you need for your VM design.
@@ -141,24 +148,25 @@ struct tlbshootdown {
 
 paddr_t allocate_onepage(void);
 paddr_t allocate_multiplepages(int npages);
-int allocate_userpage(struct addrspace*, int, int, int32_t*);
-void free_userpage(int32_t index);
-void copy_page(int32_t dst, int32_t src);
+int allocate_userpage(struct addrspace*, int, int, index_t*);
+void free_userpage(index_t index);
+void copy_page(index_t dst, index_t src);
 void* memset(void *ptr, int ch, size_t len);
 
 int swapin(struct addrspace *as, int uberindex, int subindex);
-int swapout(int32_t *coremapindex);
-int readfromswap(int32_t coremapindex, int32_t swapoffset);
-int writetoswap(int32_t coremapindex, int32_t *swapoffset);
-void evict(int32_t coremapindex);
-int32_t findfreeswapoffset(void);
-int32_t chooseframetoevict(void);
+int swapout(index_t *coremapindex, bool allocate);
+int readfromswap(index_t coremapindex, index_t swapoffset);
+int writetoswap(index_t coremapindex, index_t *swapoffset);
+void evict(index_t coremapindex);
+index_t findfreeswapoffset(void);
+int chooseframetoevict(index_t*);
 
 struct virtualpage
 {
-	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
-	int32_t swapfileoffset;
-	uint8_t permission;
+	index_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
+	index_t swapfileoffset;
+	uint8_t permission:3;
+	uint8_t status:3;
 };
 
 struct memorypage
@@ -182,7 +190,7 @@ struct struct_coremap
 	paddr_t freeaddr;
 	paddr_t firstaddr;
 	paddr_t lastaddr;
-	uint32_t numpages;
+	index_t numpages;
 	bool bisbootstrapdone;
     int swapcounter;
 

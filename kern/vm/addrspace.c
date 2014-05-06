@@ -93,29 +93,28 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 					newas->uberArray[i][j] = as_init_virtualpage();
 					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
-					if(old->uberArray[i][j]->coremapindex != -1)
+					if( (old->uberArray[i][j]->status & VPAGE_INMEMORY) != 0 )
 					{
-						int32_t address;
+						index_t address;
 						int err= allocate_userpage(newas, i, j, &address);
 						if(err)
 							return err;
 						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
-						if(address == -1)
-							KASSERT(!"User page allocation must not fail");
+
 						newas->uberArray[i][j]->coremapindex = address;
 						copy_page(address, old->uberArray[i][j]->coremapindex);
+						newas->uberArray[i][j]->status |= VPAGE_INMEMORY;
 					}
-					else if(old->uberArray[i][j]->swapfileoffset != -1)
+					else if( (old->uberArray[i][j]->swapfileoffset & VPAGE_INSWAP) != 0)
 					{
-						int32_t address;
+						index_t address;
 						int err= allocate_userpage(newas, i, j, &address);
 						if(err)
 							return err;
 						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
-						if(address == -1)
-							KASSERT(!"User page allocation must not fail");
 						newas->uberArray[i][j]->coremapindex = address;
 						readfromswap(address, old->uberArray[i][j]->swapfileoffset);
+						newas->uberArray[i][j]->status |= VPAGE_INMEMORY;
 					}
 
 				}
@@ -140,12 +139,12 @@ as_destroy(struct addrspace *as)
 			{
 				if(as->uberArray[i][j] != NULL)	//page exists free it
 				{
-					if(as->uberArray[i][j]->coremapindex != -1)//there exists a frame corresponding to virtual page, free it
+					if( (as->uberArray[i][j]->status & VPAGE_INMEMORY) != 0)//there exists a frame corresponding to virtual page, free it
 					{
 						KASSERT(g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].as == as);
 						free_userpage(as->uberArray[i][j]->coremapindex);
 					}
-					if(as->uberArray[i][j]->swapfileoffset != -1)
+					if((as->uberArray[i][j]->status & VPAGE_INSWAP) != 0)
 					{
 						//dosomething with the swapfile here
 					}
@@ -337,8 +336,9 @@ void as_init_uberarray_section(struct addrspace *as, int index)
 struct virtualpage* as_init_virtualpage()
 {
 	struct virtualpage *page = kmalloc(sizeof(struct virtualpage));
-	page->coremapindex = -1;
-	page->swapfileoffset = -1;
+	page->coremapindex = 0;
+	page->swapfileoffset = 0;
 	page->permission = 0;
+	page->status = VPAGE_UNINIT;
 	return page;
 }
