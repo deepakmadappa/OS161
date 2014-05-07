@@ -143,8 +143,9 @@ paddr_t allocate_onepage(void)
 	int err= chooseframetoevict(&index);
 	if(err)
 		panic("nopage for kernel :(");
-	 err = swapout(&index, false);
 	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED && g_coremap.physicalpages[index].state != PAGE_FREE);
+
+	 err = swapout(&index, false);
 	if(err)
 		panic("err");
 	g_coremap.physicalpages[index].numallocations = 1;
@@ -349,6 +350,8 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
 int
 vm_fault(int faulttype, vaddr_t faultaddress)
 {
+	lock_acquire(g_swapper.lk_swapper);
+
 	paddr_t paddr;
 	int i;
 	uint32_t ehi, elo;
@@ -479,6 +482,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 		tlb_write(ehi, elo, i);
 		splx(spl);
+		lock_release(g_swapper.lk_swapper);
+
 		return 0;
 	}
 
@@ -488,6 +493,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 	tlb_write(ehi, elo, as->tlbclock);
 	splx(spl);
+	lock_release(g_swapper.lk_swapper);
+
 	return 0;
 	//kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
 	//splx(spl);
@@ -586,7 +593,6 @@ int readfromswap(index_t coremapindex, index_t swapoffset)
 
 int swapout(index_t *coremapindex, bool allocate)
 {
-	lock_acquire(g_swapper.lk_swapper);
 	int err=0;
 	if(allocate == true)	//if caller did not mention then we pick one
 		err = chooseframetoevict(coremapindex);
@@ -601,7 +607,7 @@ int swapout(index_t *coremapindex, bool allocate)
 	ts.ts_addrspace = g_coremap.physicalpages[*coremapindex].as;
 	ts.ts_vaddr = g_coremap.physicalpages[*coremapindex].vpage;
 
-	victim_as->uberArray[uberindex][subindex]->status &= 0xFFFE;	//set the first bit to 0;
+	victim_as->uberArray[uberindex][subindex]->status &= 0xFE;	//set the first bit to 0;
 	vm_tlbshootdown(&ts);
 	ipi_tlbshootdown_broadcast(&ts);
 	if(g_coremap.physicalpages[*coremapindex].state == PAGE_DIRTY)
@@ -617,7 +623,7 @@ int swapout(index_t *coremapindex, bool allocate)
 
 	evict(*coremapindex);
 
-	lock_release(g_swapper.lk_swapper);
+
 	return 0;
 }
 
@@ -628,7 +634,7 @@ int swapin(struct addrspace *as, int uberindex, int subindex)
 	index_t freemem = 0;
 	int err;
 	err=allocate_userpage(as, uberindex, subindex, &freemem);
-	lock_acquire(g_swapper.lk_swapper);
+
 	if(err)
 		return err;
 
@@ -640,9 +646,9 @@ int swapin(struct addrspace *as, int uberindex, int subindex)
 	g_coremap.physicalpages[freemem].state = PAGE_DIRTY;
 	g_coremap.physicalpages[freemem].vpage = INDECES_TO_VADDR(uberindex,subindex);
 	as->uberArray[uberindex][subindex]->coremapindex = freemem;
-	as->uberArray[uberindex][subindex]->status &= VPAGE_INMEMORY;
+	as->uberArray[uberindex][subindex]->status |= VPAGE_INMEMORY;
 	spinlock_release(&spinlkcore);
-	lock_release(g_swapper.lk_swapper);
+
 	if(err)
 		return err;
 

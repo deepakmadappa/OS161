@@ -66,7 +66,7 @@ int
 as_copy(struct addrspace *old, struct addrspace **ret)
 {
 	struct addrspace *newas;
-
+	lock_acquire(g_swapper.lk_swapper);
 	newas = as_create();
 	if (newas==NULL) {
 		return ENOMEM;
@@ -125,6 +125,7 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	newas->as_heapend = old->as_heapend;
 	*ret = newas;
 	newas->segmentll = NULL;
+	lock_release(g_swapper.lk_swapper);
 	return 0;
 }
 
