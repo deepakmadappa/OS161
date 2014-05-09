@@ -146,7 +146,7 @@ paddr_t allocate_onepage(void)
 		panic("nopage for kernel :(");
 	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED && g_coremap.physicalpages[index].state != PAGE_FREE);
 
-	 err = swapout(&index, false);
+	 err = swapout(&index, false, NULL);
 	if(err)
 		panic("err");
 	spinlock_acquire(&spinlkcore);
@@ -220,7 +220,7 @@ paddr_t allocate_multiplepages(int npages)
 			if(g_coremap.physicalpages[j].state!= PAGE_FREE)
 			{
 				index_t index = j;
-				swapout(&index, false);
+				swapout(&index, false, NULL);
 			}
 			g_coremap.physicalpages[j].state = PAGE_FIXED;
 			g_coremap.physicalpages[j].numallocations = 0;//to indicate that this is part of multiple page allocation
@@ -256,7 +256,7 @@ int allocate_userpage(struct addrspace* for_as, int uberindex, int subindex, ind
 	}
 	*retval = -1;
 	spinlock_release(&spinlkcore);
-	int err = swapout(retval, true);
+	int err = swapout(retval, true, NULL);
 	if(err)
 	{
 		return err;
@@ -603,7 +603,7 @@ int readfromswap(index_t coremapindex, index_t swapoffset)
 	return 0;
 }
 
-int swapout(index_t *coremapindex, bool allocate)
+int swapout(index_t *coremapindex, bool allocate, struct addrspace* as)
 {
 	int err=0;
 	if(allocate == true)	//if caller did not mention then we pick one
@@ -620,7 +620,8 @@ int swapout(index_t *coremapindex, bool allocate)
 	ts.ts_vaddr = g_coremap.physicalpages[*coremapindex].vpage;
 
 	victim_as->uberArray[uberindex][subindex]->status &= 0xFE;	//set the first bit to 0;
-	vm_tlbshootdown(&ts);
+	if(g_coremap.physicalpages[*coremapindex].as == as)
+		vm_tlbshootdown(&ts);
 	ipi_tlbshootdown_broadcast(&ts);
 	if(g_coremap.physicalpages[*coremapindex].state == PAGE_DIRTY)
 	{
@@ -649,7 +650,7 @@ int swapin(struct addrspace *as, int uberindex, int subindex)
 
 	if(err)
 		return err;
-
+	KASSERT( (as->uberArray[uberindex][subindex]->status & VPAGE_INSWAP) != 0);
 	//now we have a  free memory frame read from file
 	err = readfromswap(freemem, as->uberArray[uberindex][subindex]->swapfileoffset);
 	spinlock_acquire(&spinlkcore);

@@ -91,7 +91,7 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 					//allocate user page
 					KASSERT(newas->uberArray[i][j] == NULL);
 					newas->uberArray[i][j] = as_init_virtualpage();
-					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
+					//newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
 					if( (old->uberArray[i][j]->status & VPAGE_INMEMORY) != 0 )
 					{
@@ -103,7 +103,7 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 
 						newas->uberArray[i][j]->coremapindex = address;
 						copy_page(address, old->uberArray[i][j]->coremapindex);
-						newas->uberArray[i][j]->status |= VPAGE_INMEMORY;
+						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
 					}
 					else if( (old->uberArray[i][j]->swapfileoffset & VPAGE_INSWAP) != 0)
 					{
@@ -114,7 +114,7 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
 						newas->uberArray[i][j]->coremapindex = address;
 						readfromswap(address, old->uberArray[i][j]->swapfileoffset);
-						newas->uberArray[i][j]->status |= VPAGE_INMEMORY;
+						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
 					}
 
 				}
@@ -123,6 +123,7 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	}
 	newas->as_heapbase = old->as_heapbase;
 	newas->as_heapend = old->as_heapend;
+	newas->as_sttop = old->as_sttop;
 	*ret = newas;
 	newas->segmentll = NULL;
 	lock_release(g_swapper.lk_swapper);

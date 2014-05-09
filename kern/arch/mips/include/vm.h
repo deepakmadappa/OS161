@@ -154,7 +154,7 @@ void copy_page(index_t dst, index_t src);
 void* memset(void *ptr, int ch, size_t len);
 
 int swapin(struct addrspace *as, int uberindex, int subindex);
-int swapout(index_t *coremapindex, bool allocate);
+int swapout(index_t *coremapindex, bool allocate, struct addrspace *as);
 int readfromswap(index_t coremapindex, index_t swapoffset);
 int writetoswap(index_t coremapindex, index_t *swapoffset);
 void evict(index_t coremapindex);
