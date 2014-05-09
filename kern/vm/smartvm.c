@@ -108,7 +108,6 @@ alloc_kpages(int npages)
 	}
 	else
 	{
-		spinlock_acquire(&spinlkcore);
 		vaddr_t retaddress = 0;
 		//allocate from coremap
 		if(npages == 1)
@@ -119,7 +118,6 @@ alloc_kpages(int npages)
 		{
 			retaddress = PADDR_TO_KVADDR(allocate_multiplepages(npages));
 		}
-		spinlock_release(&spinlkcore);
 		return retaddress;
 	}
 
@@ -128,6 +126,7 @@ alloc_kpages(int npages)
 
 paddr_t allocate_onepage(void)
 {
+	spinlock_acquire(&spinlkcore);
 
 	for(uint32_t i=0;i<g_coremap.numpages;i++)
 	{
@@ -135,9 +134,11 @@ paddr_t allocate_onepage(void)
 		{
 			g_coremap.physicalpages[i].numallocations = 1;
 			g_coremap.physicalpages[i].state = PAGE_FIXED;
+			spinlock_release(&spinlkcore);
 			return (i*PAGE_SIZE);
 		}
 	}
+	spinlock_release(&spinlkcore);
 
 	index_t index;
 	int err= chooseframetoevict(&index);
@@ -148,8 +149,12 @@ paddr_t allocate_onepage(void)
 	 err = swapout(&index, false);
 	if(err)
 		panic("err");
+	spinlock_acquire(&spinlkcore);
+
 	g_coremap.physicalpages[index].numallocations = 1;
 	g_coremap.physicalpages[index].state = PAGE_FIXED;
+	spinlock_release(&spinlkcore);
+
 	return (index*PAGE_SIZE);
 
 	//TODO: need to evict here
@@ -163,6 +168,8 @@ paddr_t allocate_multiplepages(int npages)
 	index_t i=0;
 	int count = 0;
 	bool found = false;
+	spinlock_acquire(&spinlkcore);
+
 	while(i< g_coremap.numpages)
 	{
 		if(g_coremap.physicalpages[i].state == PAGE_FREE)
@@ -180,6 +187,8 @@ paddr_t allocate_multiplepages(int npages)
 		}
 		i++;
 	}
+	spinlock_release(&spinlkcore);
+
 	if(!found)
 	{
 		count = 0;
@@ -518,7 +527,7 @@ int chooseframetoevict(index_t *retval)
 	{
 		if(g_coremap.physicalpages[i].state == PAGE_CLEAN || g_coremap.physicalpages[i].state == PAGE_DIRTY)
 		{
-			g_coremap.swapcounter = (i + 5) % g_coremap.numpages;
+			g_coremap.swapcounter = i;
 			//			struct tlbshootdown ts;
 			*retval = i;
 			return 0;
@@ -537,7 +546,9 @@ index_t findfreeswapoffset()
 
 void evict(index_t coremapindex)
 {
-	KASSERT(g_coremap.physicalpages[coremapindex].state == PAGE_CLEAN);
+	spinlock_acquire(&spinlkcore);
+
+	//KASSERT(g_coremap.physicalpages[coremapindex].state == PAGE_CLEAN);
 	struct addrspace *as = g_coremap.physicalpages[coremapindex].as;
 	int32_t uberindex = VADDR_TO_UBERINDEX(g_coremap.physicalpages[coremapindex].vpage);
 	int32_t subindex = VADDR_TO_SUBINDEX(g_coremap.physicalpages[coremapindex].vpage);
@@ -545,6 +556,7 @@ void evict(index_t coremapindex)
 	g_coremap.physicalpages[coremapindex].state = PAGE_FREE;
 	g_coremap.physicalpages[coremapindex].as = NULL;
 	g_coremap.physicalpages[coremapindex].numallocations = 0;
+	spinlock_release(&spinlkcore);
 
 }
 

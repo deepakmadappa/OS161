@@ -40,7 +40,7 @@ typedef uint8_t page_state_t;
 #define VPAGE_UNINIT 0
 #define VPAGE_INMEMORY 1
 #define VPAGE_INSWAP 2
-
+#define VPAGE_BUSY 4
 /*
  * Machine-dependent VM system definitions.
  */
