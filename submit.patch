@@ -12,25 +12,31 @@ index 993b10c..c3c63dd 100644
   * MIPS exception codes.
   */
 diff --git a/kern/arch/mips/include/vm.h b/kern/arch/mips/include/vm.h
-index af393c7..86ed9da 100644
+index af393c7..e03f4e8 100644
 --- a/kern/arch/mips/include/vm.h
 +++ b/kern/arch/mips/include/vm.h
-@@ -29,8 +29,13 @@
+@@ -29,8 +29,18 @@
  
  #ifndef _MIPS_VM_H_
  #define _MIPS_VM_H_
+-
+-
 +#include <lib.h>
 +typedef uint8_t page_state_t;
- 
--
++
 +#define PAGE_FREE 0
 +#define PAGE_CLEAN 1
 +#define PAGE_DIRTY 2
 +#define PAGE_FIXED 3
++
++#define VPAGE_UNINIT 0
++#define VPAGE_INMEMORY 1
++#define VPAGE_INSWAP 2
++#define VPAGE_BUSY 4
  /*
   * Machine-dependent VM system definitions.
   */
-@@ -67,6 +72,21 @@
+@@ -67,6 +77,21 @@
   */
  #define PADDR_TO_KVADDR(paddr) ((paddr)+MIPS_KSEG0)
  
@@ -52,7 +58,16 @@ index af393c7..86ed9da 100644
  /*
   * The top of user space. (Actually, the address immediately above the
   * last valid user address.)
-@@ -116,7 +136,51 @@ struct tlbshootdown {
+@@ -108,6 +133,8 @@ void ram_getsize(paddr_t *lo, paddr_t *hi);
+  * We'll take up to 16 invalidations before just flushing the whole TLB.
+  */
+ 
++typedef uint16_t index_t;
++
+ struct tlbshootdown {
+ 	/*
+ 	 * Change this to what you need for your VM design.
+@@ -116,7 +143,70 @@ struct tlbshootdown {
  	vaddr_t ts_vaddr;
  };
  
@@ -61,18 +76,25 @@ index af393c7..86ed9da 100644
  
 +paddr_t allocate_onepage(void);
 +paddr_t allocate_multiplepages(int npages);
-+int32_t allocate_userpage(struct addrspace*);
-+void free_userpage(int32_t index);
-+void copy_page(int32_t dst, int32_t src);
++int allocate_userpage(struct addrspace*, int, int, index_t*);
++void free_userpage(index_t index);
++void copy_page(index_t dst, index_t src);
 +void* memset(void *ptr, int ch, size_t len);
 +
-+
++int swapin(struct addrspace *as, int uberindex, int subindex);
++int swapout(index_t *coremapindex, bool allocate, struct addrspace *as);
++int readfromswap(index_t coremapindex, index_t swapoffset);
++int writetoswap(index_t coremapindex, index_t *swapoffset);
++void evict(index_t coremapindex);
++index_t findfreeswapoffset(void);
++int chooseframetoevict(index_t*);
 +
 +struct virtualpage
 +{
-+	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
-+	int16_t swapfileoffset;
-+	uint8_t permission;
++	index_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
++	index_t swapfileoffset;
++	uint8_t permission:3;
++	uint8_t status:3;
 +};
 +
 +struct memorypage
@@ -81,9 +103,11 @@ index af393c7..86ed9da 100644
 +    /* page state */
 +    page_state_t state;
 +
++
 +    uint32_t numallocations;
 +    //uint64_t timestamp;
 +    struct addrspace *as;
++    vaddr_t vpage;
 +    //add more stuff here
 +};
 +
@@ -94,9 +118,19 @@ index af393c7..86ed9da 100644
 +	paddr_t freeaddr;
 +	paddr_t firstaddr;
 +	paddr_t lastaddr;
-+	uint32_t numpages;
++	index_t numpages;
 +	bool bisbootstrapdone;
++    int swapcounter;
++
 +}g_coremap;
++
++struct struct_swapper
++{
++        struct vnode *swapfile;
++        off_t fileend;
++        struct lock *lk_swapper;
++}g_swapper;
++
 +void dumpcoremap(void);
 +
 +//static paddr_t getppages(unsigned long npages);
@@ -362,6 +396,18 @@ index 6788e97..1983cc3 100644
  
  /*
   * Functions in loadelf.c
+diff --git a/kern/include/cpu.h b/kern/include/cpu.h
+index 2b03349..8b08dcf 100644
+--- a/kern/include/cpu.h
++++ b/kern/include/cpu.h
+@@ -166,6 +166,7 @@ void cpu_halt(void);
+ void ipi_send(struct cpu *target, int code);
+ void ipi_broadcast(int code);
+ void ipi_tlbshootdown(struct cpu *target, const struct tlbshootdown *mapping);
++void ipi_tlbshootdown_broadcast(const struct tlbshootdown *mapping);
+ 
+ void interprocessor_interrupt(void);
+ 
 diff --git a/kern/include/kern/limits.h b/kern/include/kern/limits.h
 index 3fad3f2..90e8eed 100644
 --- a/kern/include/kern/limits.h
@@ -10197,7 +10243,7 @@ index 9a7468c..651a2ab 100644
 +	lock_release(rwlk->writelock);
  }
 diff --git a/kern/thread/thread.c b/kern/thread/thread.c
-index e7235e3..ad47a06 100644
+index e7235e3..8e5c401 100644
 --- a/kern/thread/thread.c
 +++ b/kern/thread/thread.c
 @@ -154,6 +154,9 @@ thread_create(const char *name)
@@ -10352,7 +10398,28 @@ index e7235e3..ad47a06 100644
  			to_send--;
  			if (c->c_isidle) {
  				/*
-@@ -1201,7 +1227,7 @@ interprocessor_interrupt(void)
+@@ -1162,6 +1188,20 @@ ipi_broadcast(int code)
+ }
+ 
+ void
++ipi_tlbshootdown_broadcast(const struct tlbshootdown *mapping)
++{
++	unsigned i;
++	struct cpu *c;
++
++	for (i=0; i < cpuarray_num(&allcpus); i++) {
++		c = cpuarray_get(&allcpus, i);
++		if (c != curcpu->c_self) {
++			ipi_tlbshootdown(c, mapping);
++		}
++	}
++}
++
++void
+ ipi_tlbshootdown(struct cpu *target, const struct tlbshootdown *mapping)
+ {
+ 	int n;
+@@ -1201,7 +1241,7 @@ interprocessor_interrupt(void)
  		spinlock_acquire(&curcpu->c_runqueue_lock);
  		if (!curcpu->c_isidle) {
  			kprintf("cpu%d: offline: warning: not idle\n",
@@ -10361,7 +10428,7 @@ index e7235e3..ad47a06 100644
  		}
  		spinlock_release(&curcpu->c_runqueue_lock);
  		kprintf("cpu%d: offline.\n", curcpu->c_number);
-@@ -1228,3 +1254,5 @@ interprocessor_interrupt(void)
+@@ -1228,3 +1268,5 @@ interprocessor_interrupt(void)
  	curcpu->c_ipi_pending = 0;
  	spinlock_release(&curcpu->c_ipi_lock);
  }
@@ -10407,7 +10474,7 @@ index 3e439c6..2ae3507 100644
   * Does most of the work for readlink().
   *
 diff --git a/kern/vm/addrspace.c b/kern/vm/addrspace.c
-index 302fa7b..9ef4735 100644
+index 302fa7b..5e8265a 100644
 --- a/kern/vm/addrspace.c
 +++ b/kern/vm/addrspace.c
 @@ -32,7 +32,10 @@
@@ -10440,18 +10507,28 @@ index 302fa7b..9ef4735 100644
  	return as;
  }
  
-@@ -65,35 +71,100 @@ as_copy(struct addrspace *old, struct addrspace **ret)
+@@ -60,40 +66,128 @@ int
+ as_copy(struct addrspace *old, struct addrspace **ret)
+ {
+ 	struct addrspace *newas;
+-
++	lock_acquire(g_swapper.lk_swapper);
+ 	newas = as_create();
  	if (newas==NULL) {
  		return ENOMEM;
  	}
 +	//dumpcoremap();
-+	for(int i=0; i< 1000000; i++)
-+	{
++	//for(int i=0; i< 10000; i++)
++	//{
++//
++	//}
  
 -	/*
 -	 * Write this.
 -	 */
-+	}
+ 
+-	(void)old;
+-	
 +	for(int i=0; i<NUM_UBERPAGES; i++)
 +	{
 +		if(old->uberArray[i] != NULL)
@@ -10465,28 +10542,47 @@ index 302fa7b..9ef4735 100644
 +					//allocate user page
 +					KASSERT(newas->uberArray[i][j] == NULL);
 +					newas->uberArray[i][j] = as_init_virtualpage();
-+					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
++					//newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 +					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
-+					if(old->uberArray[i][j]->coremapindex != -1)
++					if( (old->uberArray[i][j]->status & VPAGE_INMEMORY) != 0 )
 +					{
-+						int32_t address = allocate_userpage(newas);
++						index_t address;
++						int err= allocate_userpage(newas, i, j, &address);
++						if(err)
++							return err;
 +						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
-+						if(address == -1)
-+							KASSERT(!"User page allocation must not fail");
++
 +						newas->uberArray[i][j]->coremapindex = address;
 +						copy_page(address, old->uberArray[i][j]->coremapindex);
++						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
 +					}
- 
--	(void)old;
--	
++					else if( ((old->uberArray[i][j]->status & VPAGE_INSWAP) != 0))
++					{
++						index_t address;
++						int err= allocate_userpage(newas, i, j, &address);
++						if(err)
++							return err;
++						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
++						newas->uberArray[i][j]->coremapindex = address;
++						readfromswap(address, old->uberArray[i][j]->swapfileoffset);
++						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
++					}
++					else
++					{
++						if(old->uberArray[i][j]->status != 0)
++							KASSERT((old->uberArray[i][j]->status == 0));
++					}
++
 +				}
 +			}
 +		}
 +	}
 +	newas->as_heapbase = old->as_heapbase;
 +	newas->as_heapend = old->as_heapend;
++	newas->as_sttop = old->as_sttop;
  	*ret = newas;
 +	newas->segmentll = NULL;
++	lock_release(g_swapper.lk_swapper);
  	return 0;
  }
  
@@ -10505,12 +10601,12 @@ index 302fa7b..9ef4735 100644
 +			{
 +				if(as->uberArray[i][j] != NULL)	//page exists free it
 +				{
-+					if(as->uberArray[i][j]->coremapindex != -1)//there exists a frame corresponding to virtual page, free it
++					if( (as->uberArray[i][j]->status & VPAGE_INMEMORY) != 0)//there exists a frame corresponding to virtual page, free it
 +					{
 +						KASSERT(g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].as == as);
 +						free_userpage(as->uberArray[i][j]->coremapindex);
 +					}
-+					if(as->uberArray[i][j]->swapfileoffset != -1)
++					if((as->uberArray[i][j]->status & VPAGE_INSWAP) != 0)
 +					{
 +						//dosomething with the swapfile here
 +					}
@@ -10539,10 +10635,10 @@ index 302fa7b..9ef4735 100644
 -	 * Write this.
 -	 */
 +	int i, spl;
++
++	(void)as;
  
 -	(void)as;  // suppress warning until code gets written
-+	(void)as;
-+
 +	/* Disable interrupts on this CPU while frobbing the TLB. */
 +	spl = splhigh();
 +
@@ -10554,7 +10650,7 @@ index 302fa7b..9ef4735 100644
  }
  
  /*
-@@ -108,27 +179,91 @@ as_activate(struct addrspace *as)
+@@ -108,26 +202,90 @@ as_activate(struct addrspace *as)
   */
  int
  as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
@@ -10630,11 +10726,9 @@ index 302fa7b..9ef4735 100644
  int
  as_prepare_load(struct addrspace *as)
  {
--	/*
--	 * Write this.
--	 */
 +
-+/*
+ 	/*
+-	 * Write this.
 +
 +
 +	for(int i=0; i<NUM_UBERPAGES; i++)
@@ -10656,11 +10750,10 @@ index 302fa7b..9ef4735 100644
 +			}
 +		}
 +	}
-+*/
+ 	 */
  
  	(void)as;
- 	return 0;
-@@ -137,10 +272,22 @@ as_prepare_load(struct addrspace *as)
+@@ -137,10 +295,22 @@ as_prepare_load(struct addrspace *as)
  int
  as_complete_load(struct addrspace *as)
  {
@@ -10687,7 +10780,7 @@ index 302fa7b..9ef4735 100644
  	(void)as;
  	return 0;
  }
-@@ -156,7 +303,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
+@@ -156,7 +326,26 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
  
  	/* Initial user-level stack pointer */
  	*stackptr = USERSTACK;
@@ -10709,9 +10802,10 @@ index 302fa7b..9ef4735 100644
 +struct virtualpage* as_init_virtualpage()
 +{
 +	struct virtualpage *page = kmalloc(sizeof(struct virtualpage));
-+	page->coremapindex = -1;
-+	page->swapfileoffset = -1;
++	page->coremapindex = 0;
++	page->swapfileoffset = 0;
 +	page->permission = 0;
++	page->status = VPAGE_UNINIT;
 +	return page;
 +}
 diff --git a/kern/vm/kmalloc.c b/kern/vm/kmalloc.c
@@ -10729,10 +10823,10 @@ index 09b764b..ea6438d 100644
  			}
 diff --git a/kern/vm/smartvm.c b/kern/vm/smartvm.c
 new file mode 100644
-index 0000000..b7ae449
+index 0000000..9da9598
 --- /dev/null
 +++ b/kern/vm/smartvm.c
-@@ -0,0 +1,405 @@
+@@ -0,0 +1,671 @@
 +/*
 + * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
 + *	The President and Fellows of Harvard College.
@@ -10772,6 +10866,10 @@ index 0000000..b7ae449
 +#include <mips/tlb.h>
 +#include <addrspace.h>
 +#include <vm.h>
++#include <kern/fcntl.h>
++#include <vfs.h>
++#include <uio.h>
++#include <cpu.h>
 +
 +static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 +static struct spinlock spinlkcore =  SPINLOCK_INITIALIZER;;
@@ -10799,6 +10897,9 @@ index 0000000..b7ae449
 +		g_coremap.physicalpages[i].state = PAGE_FREE;
 +	}
 +	g_coremap.bisbootstrapdone = true;
++
++	g_swapper.fileend=0;
++	g_swapper.lk_swapper = lock_create("swapperlock");
 +
 +
 +	//TODO set flag for alloc kpages
@@ -10836,7 +10937,6 @@ index 0000000..b7ae449
 +	}
 +	else
 +	{
-+		spinlock_acquire(&spinlkcore);
 +		vaddr_t retaddress = 0;
 +		//allocate from coremap
 +		if(npages == 1)
@@ -10847,7 +10947,6 @@ index 0000000..b7ae449
 +		{
 +			retaddress = PADDR_TO_KVADDR(allocate_multiplepages(npages));
 +		}
-+		spinlock_release(&spinlkcore);
 +		return retaddress;
 +	}
 +
@@ -10856,6 +10955,7 @@ index 0000000..b7ae449
 +
 +paddr_t allocate_onepage(void)
 +{
++	spinlock_acquire(&spinlkcore);
 +
 +	for(uint32_t i=0;i<g_coremap.numpages;i++)
 +	{
@@ -10863,19 +10963,42 @@ index 0000000..b7ae449
 +		{
 +			g_coremap.physicalpages[i].numallocations = 1;
 +			g_coremap.physicalpages[i].state = PAGE_FIXED;
++			spinlock_release(&spinlkcore);
 +			return (i*PAGE_SIZE);
 +		}
 +	}
-+	panic("there is no free page");
++	spinlock_release(&spinlkcore);
++
++	index_t index;
++	int err= chooseframetoevict(&index);
++	if(err)
++		panic("nopage for kernel :(");
++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED && g_coremap.physicalpages[index].state != PAGE_FREE);
++
++	 err = swapout(&index, false, NULL);
++	if(err)
++		panic("err");
++	spinlock_acquire(&spinlkcore);
++
++	g_coremap.physicalpages[index].numallocations = 1;
++	g_coremap.physicalpages[index].state = PAGE_FIXED;
++	spinlock_release(&spinlkcore);
++
++	return (index*PAGE_SIZE);
++
 +	//TODO: need to evict here
++	panic("no page");
 +	return 0;
 +}
 +
 +paddr_t allocate_multiplepages(int npages)
 +{
 +
-+	uint32_t i=0;
++	index_t i=0;
 +	int count = 0;
++	bool found = false;
++	spinlock_acquire(&spinlkcore);
++
 +	while(i< g_coremap.numpages)
 +	{
 +		if(g_coremap.physicalpages[i].state == PAGE_FREE)
@@ -10887,13 +11010,47 @@ index 0000000..b7ae449
 +			count = 0;
 +		}
 +		if(count == npages)
++		{
 +			break; //found enough contiguous pages, so stop the search
++			found = true;
++		}
 +		i++;
++	}
++	spinlock_release(&spinlkcore);
++
++	if(!found)
++	{
++		count = 0;
++		int err=chooseframetoevict(&i);
++		if(err)
++			panic("no page for kernel");
++		while(i< g_coremap.numpages)
++		{
++			if(g_coremap.physicalpages[i].state != PAGE_FIXED)
++			{
++				count++;
++			}
++			else
++			{
++				count = 0;
++			}
++			if(count == npages)
++			{
++				break; //found enough contiguous pages, so stop the search
++				found = true;
++			}
++			i++;
++		}
 +	}
 +	if(count == npages)
 +	{
-+		for(uint32_t j = i - npages + 1; j <= i ; j++)	// counter i would have stopped after npages of our start
++		for(index_t j = i - npages + 1; j <= i ; j++)	// counter i would have stopped after npages of our start
 +		{
++			if(g_coremap.physicalpages[j].state!= PAGE_FREE)
++			{
++				index_t index = j;
++				swapout(&index, false, NULL);
++			}
 +			g_coremap.physicalpages[j].state = PAGE_FIXED;
 +			g_coremap.physicalpages[j].numallocations = 0;//to indicate that this is part of multiple page allocation
 +		}
@@ -10907,31 +11064,45 @@ index 0000000..b7ae449
 +	return (PAGE_SIZE * (i-npages +1));
 +}
 +
-+int32_t allocate_userpage(struct addrspace* as)
++int allocate_userpage(struct addrspace* for_as, int uberindex, int subindex, index_t *retval)
 +{
-+	KASSERT(as != NULL);
++	KASSERT(for_as != NULL);
 +	spinlock_acquire(&spinlkcore);
-+	for(uint32_t i=0;i<g_coremap.numpages;i++)
++	for(index_t i=0;i<g_coremap.numpages;i++)
 +	{
 +		if( g_coremap.physicalpages[i].state == PAGE_FREE)
 +		{
 +			g_coremap.physicalpages[i].numallocations = 1;
 +			g_coremap.physicalpages[i].state = PAGE_DIRTY;
-+			g_coremap.physicalpages[i].as = as;
++			g_coremap.physicalpages[i].as = for_as;
++			g_coremap.physicalpages[i].vpage = INDECES_TO_VADDR(uberindex,subindex);
 +			spinlock_release(&spinlkcore);
-+			memset((void *)PADDR_TO_KVADDR(i * PAGE_SIZE), 0, PAGE_SIZE );
-+			return (int32_t)i;
++			memset((void *)(PADDR_TO_KVADDR(i * PAGE_SIZE)), 0, PAGE_SIZE );
++			*retval = i;
++
++			return 0;
 +		}
 +	}
++	*retval = -1;
++	spinlock_release(&spinlkcore);
++	int err = swapout(retval, true, NULL);
++	if(err)
++	{
++		return err;
++	}
++	spinlock_acquire(&spinlkcore);
++	g_coremap.physicalpages[*retval].numallocations = 1;
++	g_coremap.physicalpages[*retval].state = PAGE_DIRTY;
++	g_coremap.physicalpages[*retval].as = for_as;
++	g_coremap.physicalpages[*retval].vpage = INDECES_TO_VADDR(uberindex,subindex);
++	memset((void *)(PADDR_TO_KVADDR((*retval) * PAGE_SIZE)), 0, PAGE_SIZE );
++
 +	spinlock_release(&spinlkcore);
 +
-+	panic("there is no free page");
-+	//TODO: need to evict here
-+
-+	return -1;
++	return 0;
 +}
 +
-+void free_userpage(int32_t index)
++void free_userpage(index_t index)
 +{
 +	KASSERT(g_coremap.physicalpages[index].state != PAGE_FREE);
 +	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED);
@@ -10979,7 +11150,7 @@ index 0000000..b7ae449
 +	spinlock_release(&spinlkcore);
 +}
 +
-+void copy_page(int32_t dst, int32_t src)
++void copy_page(index_t dst, index_t src)
 +{
 +	spinlock_acquire(&spinlkcore);
 +	memcpy( (char*)PADDR_TO_KVADDR(PAGE_SIZE * dst), (char*)PADDR_TO_KVADDR(src * PAGE_SIZE), PAGE_SIZE);
@@ -10989,19 +11160,36 @@ index 0000000..b7ae449
 +void
 +vm_tlbshootdown_all(void)
 +{
-+	panic("dumbvm tried to do tlb shootdown?!\n");
++	int spl = splhigh();
++
++	for (int i=0; i<NUM_TLB; i++) {
++		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
++	}
++	//as->tlbclock = 0;
++	splx(spl);
 +}
 +
 +void
 +vm_tlbshootdown(const struct tlbshootdown *ts)
 +{
-+	(void)ts;
-+	panic("dumbvm tried to do tlb shootdown?!\n");
++	int spl = splhigh();
++	uint32_t ehi, elo;
++	//int32_t uberindex = VADDR_TO_UBERINDEX(ts->ts_vaddr);
++	//int32_t subindex = VADDR_TO_SUBINDEX(ts->ts_vaddr);
++	for (int i=0; i<NUM_TLB; i++) {
++		tlb_read(&ehi, &elo, i);
++		if(ehi == ts->ts_vaddr)
++			tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
++	}
++	//as->tlbclock = 0;
++	splx(spl);
 +}
 +
 +int
 +vm_fault(int faulttype, vaddr_t faultaddress)
 +{
++	lock_acquire(g_swapper.lk_swapper);
++
 +	paddr_t paddr;
 +	int i;
 +	uint32_t ehi, elo;
@@ -11060,8 +11248,12 @@ index 0000000..b7ae449
 +		{
 +			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
 +			as->uberArray[uberIndex][subIndex]->permission = 0x6;
-+			int index = allocate_userpage(as);
++			index_t index;
++			int err= allocate_userpage(as, uberIndex, subIndex, &index);
++			if(err)
++				return err;
 +			as->uberArray[uberIndex][subIndex]->coremapindex = index;
++			as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
 +		}
 +		if(as->as_sttop < faultaddress)
 +			as->as_sttop = faultaddress;
@@ -11076,26 +11268,41 @@ index 0000000..b7ae449
 +		{
 +			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
 +			as->uberArray[uberIndex][subIndex]->permission = 0x6;
-+			int index = allocate_userpage(as);
++			index_t index;
++			int err= allocate_userpage(as, uberIndex, subIndex, &index);
++			if(err)
++				return err;
 +			as->uberArray[uberIndex][subIndex]->coremapindex = index;
++			as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
 +		}
 +	}
-+	else if(as->uberArray[uberIndex][subIndex]->coremapindex == -1)
++	else if((as->uberArray[uberIndex][subIndex]->status & VPAGE_INMEMORY)==0 && (as->uberArray[uberIndex][subIndex]->status & VPAGE_INSWAP)==0)
 +	{
 +		KASSERT(as->uberArray[uberIndex] !=NULL );
 +		KASSERT(as->uberArray[uberIndex][subIndex] != NULL);
-+		int index = allocate_userpage(as);
++		index_t index;
++		int err= allocate_userpage(as, uberIndex, subIndex, &index);
++		if(err)
++			return err;
 +		as->uberArray[uberIndex][subIndex]->coremapindex = index;
++		as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
++	}
++	if( (as->uberArray[uberIndex][subIndex]->status & VPAGE_INMEMORY) == 0 && (as->uberArray[uberIndex][subIndex]->status & VPAGE_INSWAP) != 0)	//page needs to be swapped in
++	{
++		int err = swapin(as, uberIndex, subIndex);
++		if(err)
++			return err;
++		as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
 +	}
 +
 +	//we will check if the virtual page is in coremap or not....right now we are assuming it is in coremap.
 +
-+	KASSERT(as->uberArray[uberIndex][subIndex]->coremapindex != -1);
++	KASSERT((as->uberArray[uberIndex][subIndex]->status & VPAGE_INMEMORY) != 0);
 +	paddr= PAGE_SIZE * as->uberArray[uberIndex][subIndex]->coremapindex;
 +
 +
 +	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].state != PAGE_FREE);
-+	//if(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != as)
++	//if(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != as && g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != NULL)
 +	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == as || g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == NULL);
 +	//KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex]);
 +	//KASSERT((paddr & PAGE_FRAME) == paddr);
@@ -11113,6 +11320,8 @@ index 0000000..b7ae449
 +		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 +		tlb_write(ehi, elo, i);
 +		splx(spl);
++		lock_release(g_swapper.lk_swapper);
++
 +		return 0;
 +	}
 +
@@ -11122,6 +11331,8 @@ index 0000000..b7ae449
 +	DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 +	tlb_write(ehi, elo, as->tlbclock);
 +	splx(spl);
++	lock_release(g_swapper.lk_swapper);
++
 +	return 0;
 +	//kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
 +	//splx(spl);
@@ -11138,12 +11349,161 @@ index 0000000..b7ae449
 +	}
 +	kprintf("\n");
 +}
++
++int chooseframetoevict(index_t *retval)
++{
++	for(index_t i = (g_coremap.swapcounter + 1)%g_coremap.numpages ; i!= g_coremap.swapcounter; i=(i+1)%g_coremap.numpages)
++	{
++		if(g_coremap.physicalpages[i].state == PAGE_CLEAN || g_coremap.physicalpages[i].state == PAGE_DIRTY)
++		{
++			g_coremap.swapcounter = i;
++			//			struct tlbshootdown ts;
++			*retval = i;
++			return 0;
++		}
++	}
++	panic("Out of memory"); //no free page;
++	return ENOMEM;
++}
++
++index_t findfreeswapoffset()
++{
++	off_t retval = g_swapper.fileend;
++	g_swapper.fileend += PAGE_SIZE;
++	return (retval / PAGE_SIZE);
++}
++
++void evict(index_t coremapindex)
++{
++	spinlock_acquire(&spinlkcore);
++
++	//KASSERT(g_coremap.physicalpages[coremapindex].state == PAGE_CLEAN);
++	struct addrspace *as = g_coremap.physicalpages[coremapindex].as;
++	int32_t uberindex = VADDR_TO_UBERINDEX(g_coremap.physicalpages[coremapindex].vpage);
++	int32_t subindex = VADDR_TO_SUBINDEX(g_coremap.physicalpages[coremapindex].vpage);
++	as->uberArray[uberindex][subindex]->status &= 0xFFFE;	//set the first bit to 0;
++	g_coremap.physicalpages[coremapindex].state = PAGE_FREE;
++	g_coremap.physicalpages[coremapindex].as = NULL;
++	g_coremap.physicalpages[coremapindex].numallocations = 0;
++	spinlock_release(&spinlkcore);
++
++}
++
++int writetoswap(index_t coremapindex, index_t *swapoffset)
++{
++	if(g_swapper.swapfile == NULL)
++	{
++		int err = vfs_open((char*)"os161.swap",O_RDWR|O_CREAT|O_TRUNC, 0, &g_swapper.swapfile);
++		if(err)
++			return err;
++	}
++	//struct addrspace *as = g_coremap.physicalpages[coremapindex].as;
++	//KASSERT(*swapoffset != -1);
++	struct iovec iov;
++	struct uio ku;
++	char *writebuf = (char*) ( PADDR_TO_KVADDR((coremapindex * PAGE_SIZE)));
++	uio_kinit(&iov, &ku, writebuf, PAGE_SIZE, ( (*swapoffset) * PAGE_SIZE), UIO_WRITE);
++	int err = vfs_write(g_swapper.swapfile, &ku);
++	if(err)
++	{
++		return err;
++	}
++	g_coremap.physicalpages[coremapindex].state = PAGE_CLEAN;
++	return 0;
++}
++
++int readfromswap(index_t coremapindex, index_t swapoffset)
++{
++	KASSERT(g_swapper.swapfile != NULL);
++	//KASSERT((swapoffset != -1));
++
++	struct iovec iov;
++	struct uio ku;
++	char *readbuf = (char*) ( PADDR_TO_KVADDR( (coremapindex * PAGE_SIZE)));
++	uio_kinit(&iov, &ku, readbuf, PAGE_SIZE, (swapoffset * PAGE_SIZE), UIO_READ);
++
++	int err = vfs_read(g_swapper.swapfile, &ku);
++	if(err)
++	{
++		return err;
++	}
++	g_coremap.physicalpages[coremapindex].state = PAGE_DIRTY;
++	g_coremap.physicalpages[coremapindex].numallocations = 1;
++	return 0;
++}
++
++int swapout(index_t *coremapindex, bool allocate, struct addrspace* as)
++{
++	int err=0;
++	if(allocate == true)	//if caller did not mention then we pick one
++		err = chooseframetoevict(coremapindex);
++	if(err)
++		return ENOMEM;
++
++	struct addrspace *victim_as = g_coremap.physicalpages[*coremapindex].as;
++	int32_t uberindex = VADDR_TO_UBERINDEX(g_coremap.physicalpages[*coremapindex].vpage);
++	int32_t subindex = VADDR_TO_SUBINDEX(g_coremap.physicalpages[*coremapindex].vpage);
++	struct tlbshootdown ts;
++
++	ts.ts_addrspace = g_coremap.physicalpages[*coremapindex].as;
++	ts.ts_vaddr = g_coremap.physicalpages[*coremapindex].vpage;
++
++	victim_as->uberArray[uberindex][subindex]->status &= 0xFE;	//set the first bit to 0;
++	if(g_coremap.physicalpages[*coremapindex].as == as)
++		vm_tlbshootdown(&ts);
++	ipi_tlbshootdown_broadcast(&ts);
++	if(g_coremap.physicalpages[*coremapindex].state == PAGE_DIRTY)
++	{
++		if((victim_as->uberArray[uberindex][subindex]->status & VPAGE_INSWAP) == 0)	//this is the first time this frame is being written to file, so allocate a place in file
++		{
++			victim_as->uberArray[uberindex][subindex]->swapfileoffset = findfreeswapoffset();	//repeated twice keep in one place
++		}
++		writetoswap(*coremapindex, &(victim_as->uberArray[uberindex][subindex]->swapfileoffset));
++		victim_as->uberArray[uberindex][subindex]->status |= VPAGE_INSWAP;
++	}
++	KASSERT(g_coremap.physicalpages[*coremapindex].state == PAGE_CLEAN && (victim_as->uberArray[uberindex][subindex]->status & VPAGE_INSWAP) != 0);
++
++	evict(*coremapindex);
++
++
++	return 0;
++}
++
++int swapin(struct addrspace *as, int uberindex, int subindex)
++{
++
++	//first try to find a free frame to swap in to.
++	index_t freemem = 0;
++	int err;
++	err=allocate_userpage(as, uberindex, subindex, &freemem);
++
++	if(err)
++		return err;
++	KASSERT( (as->uberArray[uberindex][subindex]->status & VPAGE_INSWAP) != 0);
++	//now we have a  free memory frame read from file
++	err = readfromswap(freemem, as->uberArray[uberindex][subindex]->swapfileoffset);
++	spinlock_acquire(&spinlkcore);
++	g_coremap.physicalpages[freemem].as = as;
++	g_coremap.physicalpages[freemem].numallocations  = 1;
++	g_coremap.physicalpages[freemem].state = PAGE_DIRTY;
++	g_coremap.physicalpages[freemem].vpage = INDECES_TO_VADDR(uberindex,subindex);
++	as->uberArray[uberindex][subindex]->coremapindex = freemem;
++	as->uberArray[uberindex][subindex]->status |= VPAGE_INMEMORY;
++	spinlock_release(&spinlkcore);
++
++	if(err)
++		return err;
++
++	return 0;
++}
++
++
 diff --git a/submit.patch b/submit.patch
 new file mode 100644
-index 0000000..184c18f
+index 0000000..b0df5bc
 --- /dev/null
 +++ b/submit.patch
-@@ -0,0 +1,11017 @@
+@@ -0,0 +1,11429 @@
 +diff --git a/kern/arch/mips/include/trapframe.h b/kern/arch/mips/include/trapframe.h
 +index 993b10c..c3c63dd 100644
 +--- a/kern/arch/mips/include/trapframe.h
@@ -11158,25 +11518,31 @@ index 0000000..184c18f
 +  * MIPS exception codes.
 +  */
 +diff --git a/kern/arch/mips/include/vm.h b/kern/arch/mips/include/vm.h
-+index af393c7..86ed9da 100644
++index af393c7..e03f4e8 100644
 +--- a/kern/arch/mips/include/vm.h
 ++++ b/kern/arch/mips/include/vm.h
-+@@ -29,8 +29,13 @@
++@@ -29,8 +29,18 @@
 + 
 + #ifndef _MIPS_VM_H_
 + #define _MIPS_VM_H_
++-
++-
 ++#include <lib.h>
 ++typedef uint8_t page_state_t;
-+ 
-+-
+++
 ++#define PAGE_FREE 0
 ++#define PAGE_CLEAN 1
 ++#define PAGE_DIRTY 2
 ++#define PAGE_FIXED 3
+++
+++#define VPAGE_UNINIT 0
+++#define VPAGE_INMEMORY 1
+++#define VPAGE_INSWAP 2
+++#define VPAGE_BUSY 4
 + /*
 +  * Machine-dependent VM system definitions.
 +  */
-+@@ -67,6 +72,21 @@
++@@ -67,6 +77,21 @@
 +  */
 + #define PADDR_TO_KVADDR(paddr) ((paddr)+MIPS_KSEG0)
 + 
@@ -11198,7 +11564,16 @@ index 0000000..184c18f
 + /*
 +  * The top of user space. (Actually, the address immediately above the
 +  * last valid user address.)
-+@@ -116,7 +136,51 @@ struct tlbshootdown {
++@@ -108,6 +133,8 @@ void ram_getsize(paddr_t *lo, paddr_t *hi);
++  * We'll take up to 16 invalidations before just flushing the whole TLB.
++  */
++ 
+++typedef uint16_t index_t;
+++
++ struct tlbshootdown {
++ 	/*
++ 	 * Change this to what you need for your VM design.
++@@ -116,7 +143,70 @@ struct tlbshootdown {
 + 	vaddr_t ts_vaddr;
 + };
 + 
@@ -11207,18 +11582,25 @@ index 0000000..184c18f
 + 
 ++paddr_t allocate_onepage(void);
 ++paddr_t allocate_multiplepages(int npages);
-++int32_t allocate_userpage(struct addrspace*);
-++void free_userpage(int32_t index);
-++void copy_page(int32_t dst, int32_t src);
+++int allocate_userpage(struct addrspace*, int, int, index_t*);
+++void free_userpage(index_t index);
+++void copy_page(index_t dst, index_t src);
 ++void* memset(void *ptr, int ch, size_t len);
 ++
-++
+++int swapin(struct addrspace *as, int uberindex, int subindex);
+++int swapout(index_t *coremapindex, bool allocate, struct addrspace *as);
+++int readfromswap(index_t coremapindex, index_t swapoffset);
+++int writetoswap(index_t coremapindex, index_t *swapoffset);
+++void evict(index_t coremapindex);
+++index_t findfreeswapoffset(void);
+++int chooseframetoevict(index_t*);
 ++
 ++struct virtualpage
 ++{
-++	int32_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
-++	int16_t swapfileoffset;
-++	uint8_t permission;
+++	index_t coremapindex;	//this traslates to physical address coremapindex * PAGE_SIZE
+++	index_t swapfileoffset;
+++	uint8_t permission:3;
+++	uint8_t status:3;
 ++};
 ++
 ++struct memorypage
@@ -11227,9 +11609,11 @@ index 0000000..184c18f
 ++    /* page state */
 ++    page_state_t state;
 ++
+++
 ++    uint32_t numallocations;
 ++    //uint64_t timestamp;
 ++    struct addrspace *as;
+++    vaddr_t vpage;
 ++    //add more stuff here
 ++};
 ++
@@ -11240,9 +11624,19 @@ index 0000000..184c18f
 ++	paddr_t freeaddr;
 ++	paddr_t firstaddr;
 ++	paddr_t lastaddr;
-++	uint32_t numpages;
+++	index_t numpages;
 ++	bool bisbootstrapdone;
+++    int swapcounter;
+++
 ++}g_coremap;
+++
+++struct struct_swapper
+++{
+++        struct vnode *swapfile;
+++        off_t fileend;
+++        struct lock *lk_swapper;
+++}g_swapper;
+++
 ++void dumpcoremap(void);
 ++
 ++//static paddr_t getppages(unsigned long npages);
@@ -11508,6 +11902,18 @@ index 0000000..184c18f
 + 
 + /*
 +  * Functions in loadelf.c
++diff --git a/kern/include/cpu.h b/kern/include/cpu.h
++index 2b03349..8b08dcf 100644
++--- a/kern/include/cpu.h
+++++ b/kern/include/cpu.h
++@@ -166,6 +166,7 @@ void cpu_halt(void);
++ void ipi_send(struct cpu *target, int code);
++ void ipi_broadcast(int code);
++ void ipi_tlbshootdown(struct cpu *target, const struct tlbshootdown *mapping);
+++void ipi_tlbshootdown_broadcast(const struct tlbshootdown *mapping);
++ 
++ void interprocessor_interrupt(void);
++ 
 +diff --git a/kern/include/kern/limits.h b/kern/include/kern/limits.h
 +index 3fad3f2..90e8eed 100644
 +--- a/kern/include/kern/limits.h
@@ -21343,7 +21749,7 @@ index 0000000..184c18f
 ++	lock_release(rwlk->writelock);
 + }
 +diff --git a/kern/thread/thread.c b/kern/thread/thread.c
-+index e7235e3..ad47a06 100644
++index e7235e3..8e5c401 100644
 +--- a/kern/thread/thread.c
 ++++ b/kern/thread/thread.c
 +@@ -154,6 +154,9 @@ thread_create(const char *name)
@@ -21498,7 +21904,28 @@ index 0000000..184c18f
 + 			to_send--;
 + 			if (c->c_isidle) {
 + 				/*
-+@@ -1201,7 +1227,7 @@ interprocessor_interrupt(void)
++@@ -1162,6 +1188,20 @@ ipi_broadcast(int code)
++ }
++ 
++ void
+++ipi_tlbshootdown_broadcast(const struct tlbshootdown *mapping)
+++{
+++	unsigned i;
+++	struct cpu *c;
+++
+++	for (i=0; i < cpuarray_num(&allcpus); i++) {
+++		c = cpuarray_get(&allcpus, i);
+++		if (c != curcpu->c_self) {
+++			ipi_tlbshootdown(c, mapping);
+++		}
+++	}
+++}
+++
+++void
++ ipi_tlbshootdown(struct cpu *target, const struct tlbshootdown *mapping)
++ {
++ 	int n;
++@@ -1201,7 +1241,7 @@ interprocessor_interrupt(void)
 + 		spinlock_acquire(&curcpu->c_runqueue_lock);
 + 		if (!curcpu->c_isidle) {
 + 			kprintf("cpu%d: offline: warning: not idle\n",
@@ -21507,7 +21934,7 @@ index 0000000..184c18f
 + 		}
 + 		spinlock_release(&curcpu->c_runqueue_lock);
 + 		kprintf("cpu%d: offline.\n", curcpu->c_number);
-+@@ -1228,3 +1254,5 @@ interprocessor_interrupt(void)
++@@ -1228,3 +1268,5 @@ interprocessor_interrupt(void)
 + 	curcpu->c_ipi_pending = 0;
 + 	spinlock_release(&curcpu->c_ipi_lock);
 + }
@@ -21553,7 +21980,7 @@ index 0000000..184c18f
 +  * Does most of the work for readlink().
 +  *
 +diff --git a/kern/vm/addrspace.c b/kern/vm/addrspace.c
-+index 302fa7b..9ef4735 100644
++index 302fa7b..5e8265a 100644
 +--- a/kern/vm/addrspace.c
 ++++ b/kern/vm/addrspace.c
 +@@ -32,7 +32,10 @@
@@ -21586,18 +22013,28 @@ index 0000000..184c18f
 + 	return as;
 + }
 + 
-+@@ -65,35 +71,100 @@ as_copy(struct addrspace *old, struct addrspace **ret)
++@@ -60,40 +66,128 @@ int
++ as_copy(struct addrspace *old, struct addrspace **ret)
++ {
++ 	struct addrspace *newas;
++-
+++	lock_acquire(g_swapper.lk_swapper);
++ 	newas = as_create();
 + 	if (newas==NULL) {
 + 		return ENOMEM;
 + 	}
 ++	//dumpcoremap();
-++	for(int i=0; i< 1000000; i++)
-++	{
+++	//for(int i=0; i< 10000; i++)
+++	//{
+++//
+++	//}
 + 
 +-	/*
 +-	 * Write this.
 +-	 */
-++	}
++ 
++-	(void)old;
++-	
 ++	for(int i=0; i<NUM_UBERPAGES; i++)
 ++	{
 ++		if(old->uberArray[i] != NULL)
@@ -21611,28 +22048,47 @@ index 0000000..184c18f
 ++					//allocate user page
 ++					KASSERT(newas->uberArray[i][j] == NULL);
 ++					newas->uberArray[i][j] = as_init_virtualpage();
-++					newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
+++					//newas->uberArray[i][j]->swapfileoffset = old->uberArray[i][j]->swapfileoffset;
 ++					newas->uberArray[i][j]->permission = old->uberArray[i][j]->permission;
-++					if(old->uberArray[i][j]->coremapindex != -1)
+++					if( (old->uberArray[i][j]->status & VPAGE_INMEMORY) != 0 )
 ++					{
-++						int32_t address = allocate_userpage(newas);
+++						index_t address;
+++						int err= allocate_userpage(newas, i, j, &address);
+++						if(err)
+++							return err;
 ++						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
-++						if(address == -1)
-++							KASSERT(!"User page allocation must not fail");
+++
 ++						newas->uberArray[i][j]->coremapindex = address;
 ++						copy_page(address, old->uberArray[i][j]->coremapindex);
+++						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
 ++					}
-+ 
-+-	(void)old;
-+-	
+++					else if( ((old->uberArray[i][j]->status & VPAGE_INSWAP) != 0))
+++					{
+++						index_t address;
+++						int err= allocate_userpage(newas, i, j, &address);
+++						if(err)
+++							return err;
+++						memset((void *)PADDR_TO_KVADDR(address * PAGE_SIZE), 0, PAGE_SIZE );
+++						newas->uberArray[i][j]->coremapindex = address;
+++						readfromswap(address, old->uberArray[i][j]->swapfileoffset);
+++						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
+++					}
+++					else
+++					{
+++						if(old->uberArray[i][j]->status != 0)
+++							KASSERT((old->uberArray[i][j]->status == 0));
+++					}
+++
 ++				}
 ++			}
 ++		}
 ++	}
 ++	newas->as_heapbase = old->as_heapbase;
 ++	newas->as_heapend = old->as_heapend;
+++	newas->as_sttop = old->as_sttop;
 + 	*ret = newas;
 ++	newas->segmentll = NULL;
+++	lock_release(g_swapper.lk_swapper);
 + 	return 0;
 + }
 + 
@@ -21651,12 +22107,12 @@ index 0000000..184c18f
 ++			{
 ++				if(as->uberArray[i][j] != NULL)	//page exists free it
 ++				{
-++					if(as->uberArray[i][j]->coremapindex != -1)//there exists a frame corresponding to virtual page, free it
+++					if( (as->uberArray[i][j]->status & VPAGE_INMEMORY) != 0)//there exists a frame corresponding to virtual page, free it
 ++					{
 ++						KASSERT(g_coremap.physicalpages[as->uberArray[i][j]->coremapindex].as == as);
 ++						free_userpage(as->uberArray[i][j]->coremapindex);
 ++					}
-++					if(as->uberArray[i][j]->swapfileoffset != -1)
+++					if((as->uberArray[i][j]->status & VPAGE_INSWAP) != 0)
 ++					{
 ++						//dosomething with the swapfile here
 ++					}
@@ -21685,10 +22141,10 @@ index 0000000..184c18f
 +-	 * Write this.
 +-	 */
 ++	int i, spl;
+++
+++	(void)as;
 + 
 +-	(void)as;  // suppress warning until code gets written
-++	(void)as;
-++
 ++	/* Disable interrupts on this CPU while frobbing the TLB. */
 ++	spl = splhigh();
 ++
@@ -21700,7 +22156,7 @@ index 0000000..184c18f
 + }
 + 
 + /*
-+@@ -108,27 +179,91 @@ as_activate(struct addrspace *as)
++@@ -108,26 +202,90 @@ as_activate(struct addrspace *as)
 +  */
 + int
 + as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
@@ -21776,11 +22232,9 @@ index 0000000..184c18f
 + int
 + as_prepare_load(struct addrspace *as)
 + {
-+-	/*
-+-	 * Write this.
-+-	 */
 ++
-++/*
++ 	/*
++-	 * Write this.
 ++
 ++
 ++	for(int i=0; i<NUM_UBERPAGES; i++)
@@ -21802,11 +22256,10 @@ index 0000000..184c18f
 ++			}
 ++		}
 ++	}
-++*/
++ 	 */
 + 
 + 	(void)as;
-+ 	return 0;
-+@@ -137,10 +272,22 @@ as_prepare_load(struct addrspace *as)
++@@ -137,10 +295,22 @@ as_prepare_load(struct addrspace *as)
 + int
 + as_complete_load(struct addrspace *as)
 + {
@@ -21833,7 +22286,7 @@ index 0000000..184c18f
 + 	(void)as;
 + 	return 0;
 + }
-+@@ -156,7 +303,25 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
++@@ -156,7 +326,26 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 + 
 + 	/* Initial user-level stack pointer */
 + 	*stackptr = USERSTACK;
@@ -21855,9 +22308,10 @@ index 0000000..184c18f
 ++struct virtualpage* as_init_virtualpage()
 ++{
 ++	struct virtualpage *page = kmalloc(sizeof(struct virtualpage));
-++	page->coremapindex = -1;
-++	page->swapfileoffset = -1;
+++	page->coremapindex = 0;
+++	page->swapfileoffset = 0;
 ++	page->permission = 0;
+++	page->status = VPAGE_UNINIT;
 ++	return page;
 ++}
 +diff --git a/kern/vm/kmalloc.c b/kern/vm/kmalloc.c
@@ -21875,10 +22329,10 @@ index 0000000..184c18f
 + 			}
 +diff --git a/kern/vm/smartvm.c b/kern/vm/smartvm.c
 +new file mode 100644
-+index 0000000..b7ae449
++index 0000000..9da9598
 +--- /dev/null
 ++++ b/kern/vm/smartvm.c
-+@@ -0,0 +1,405 @@
++@@ -0,0 +1,671 @@
 ++/*
 ++ * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
 ++ *	The President and Fellows of Harvard College.
@@ -21918,6 +22372,10 @@ index 0000000..184c18f
 ++#include <mips/tlb.h>
 ++#include <addrspace.h>
 ++#include <vm.h>
+++#include <kern/fcntl.h>
+++#include <vfs.h>
+++#include <uio.h>
+++#include <cpu.h>
 ++
 ++static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 ++static struct spinlock spinlkcore =  SPINLOCK_INITIALIZER;;
@@ -21945,6 +22403,9 @@ index 0000000..184c18f
 ++		g_coremap.physicalpages[i].state = PAGE_FREE;
 ++	}
 ++	g_coremap.bisbootstrapdone = true;
+++
+++	g_swapper.fileend=0;
+++	g_swapper.lk_swapper = lock_create("swapperlock");
 ++
 ++
 ++	//TODO set flag for alloc kpages
@@ -21982,7 +22443,6 @@ index 0000000..184c18f
 ++	}
 ++	else
 ++	{
-++		spinlock_acquire(&spinlkcore);
 ++		vaddr_t retaddress = 0;
 ++		//allocate from coremap
 ++		if(npages == 1)
@@ -21993,7 +22453,6 @@ index 0000000..184c18f
 ++		{
 ++			retaddress = PADDR_TO_KVADDR(allocate_multiplepages(npages));
 ++		}
-++		spinlock_release(&spinlkcore);
 ++		return retaddress;
 ++	}
 ++
@@ -22002,6 +22461,7 @@ index 0000000..184c18f
 ++
 ++paddr_t allocate_onepage(void)
 ++{
+++	spinlock_acquire(&spinlkcore);
 ++
 ++	for(uint32_t i=0;i<g_coremap.numpages;i++)
 ++	{
@@ -22009,19 +22469,42 @@ index 0000000..184c18f
 ++		{
 ++			g_coremap.physicalpages[i].numallocations = 1;
 ++			g_coremap.physicalpages[i].state = PAGE_FIXED;
+++			spinlock_release(&spinlkcore);
 ++			return (i*PAGE_SIZE);
 ++		}
 ++	}
-++	panic("there is no free page");
+++	spinlock_release(&spinlkcore);
+++
+++	index_t index;
+++	int err= chooseframetoevict(&index);
+++	if(err)
+++		panic("nopage for kernel :(");
+++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED && g_coremap.physicalpages[index].state != PAGE_FREE);
+++
+++	 err = swapout(&index, false, NULL);
+++	if(err)
+++		panic("err");
+++	spinlock_acquire(&spinlkcore);
+++
+++	g_coremap.physicalpages[index].numallocations = 1;
+++	g_coremap.physicalpages[index].state = PAGE_FIXED;
+++	spinlock_release(&spinlkcore);
+++
+++	return (index*PAGE_SIZE);
+++
 ++	//TODO: need to evict here
+++	panic("no page");
 ++	return 0;
 ++}
 ++
 ++paddr_t allocate_multiplepages(int npages)
 ++{
 ++
-++	uint32_t i=0;
+++	index_t i=0;
 ++	int count = 0;
+++	bool found = false;
+++	spinlock_acquire(&spinlkcore);
+++
 ++	while(i< g_coremap.numpages)
 ++	{
 ++		if(g_coremap.physicalpages[i].state == PAGE_FREE)
@@ -22033,13 +22516,47 @@ index 0000000..184c18f
 ++			count = 0;
 ++		}
 ++		if(count == npages)
+++		{
 ++			break; //found enough contiguous pages, so stop the search
+++			found = true;
+++		}
 ++		i++;
+++	}
+++	spinlock_release(&spinlkcore);
+++
+++	if(!found)
+++	{
+++		count = 0;
+++		int err=chooseframetoevict(&i);
+++		if(err)
+++			panic("no page for kernel");
+++		while(i< g_coremap.numpages)
+++		{
+++			if(g_coremap.physicalpages[i].state != PAGE_FIXED)
+++			{
+++				count++;
+++			}
+++			else
+++			{
+++				count = 0;
+++			}
+++			if(count == npages)
+++			{
+++				break; //found enough contiguous pages, so stop the search
+++				found = true;
+++			}
+++			i++;
+++		}
 ++	}
 ++	if(count == npages)
 ++	{
-++		for(uint32_t j = i - npages + 1; j <= i ; j++)	// counter i would have stopped after npages of our start
+++		for(index_t j = i - npages + 1; j <= i ; j++)	// counter i would have stopped after npages of our start
 ++		{
+++			if(g_coremap.physicalpages[j].state!= PAGE_FREE)
+++			{
+++				index_t index = j;
+++				swapout(&index, false, NULL);
+++			}
 ++			g_coremap.physicalpages[j].state = PAGE_FIXED;
 ++			g_coremap.physicalpages[j].numallocations = 0;//to indicate that this is part of multiple page allocation
 ++		}
@@ -22053,31 +22570,45 @@ index 0000000..184c18f
 ++	return (PAGE_SIZE * (i-npages +1));
 ++}
 ++
-++int32_t allocate_userpage(struct addrspace* as)
+++int allocate_userpage(struct addrspace* for_as, int uberindex, int subindex, index_t *retval)
 ++{
-++	KASSERT(as != NULL);
+++	KASSERT(for_as != NULL);
 ++	spinlock_acquire(&spinlkcore);
-++	for(uint32_t i=0;i<g_coremap.numpages;i++)
+++	for(index_t i=0;i<g_coremap.numpages;i++)
 ++	{
 ++		if( g_coremap.physicalpages[i].state == PAGE_FREE)
 ++		{
 ++			g_coremap.physicalpages[i].numallocations = 1;
 ++			g_coremap.physicalpages[i].state = PAGE_DIRTY;
-++			g_coremap.physicalpages[i].as = as;
+++			g_coremap.physicalpages[i].as = for_as;
+++			g_coremap.physicalpages[i].vpage = INDECES_TO_VADDR(uberindex,subindex);
 ++			spinlock_release(&spinlkcore);
-++			memset((void *)PADDR_TO_KVADDR(i * PAGE_SIZE), 0, PAGE_SIZE );
-++			return (int32_t)i;
+++			memset((void *)(PADDR_TO_KVADDR(i * PAGE_SIZE)), 0, PAGE_SIZE );
+++			*retval = i;
+++
+++			return 0;
 ++		}
 ++	}
+++	*retval = -1;
+++	spinlock_release(&spinlkcore);
+++	int err = swapout(retval, true, NULL);
+++	if(err)
+++	{
+++		return err;
+++	}
+++	spinlock_acquire(&spinlkcore);
+++	g_coremap.physicalpages[*retval].numallocations = 1;
+++	g_coremap.physicalpages[*retval].state = PAGE_DIRTY;
+++	g_coremap.physicalpages[*retval].as = for_as;
+++	g_coremap.physicalpages[*retval].vpage = INDECES_TO_VADDR(uberindex,subindex);
+++	memset((void *)(PADDR_TO_KVADDR((*retval) * PAGE_SIZE)), 0, PAGE_SIZE );
+++
 ++	spinlock_release(&spinlkcore);
 ++
-++	panic("there is no free page");
-++	//TODO: need to evict here
-++
-++	return -1;
+++	return 0;
 ++}
 ++
-++void free_userpage(int32_t index)
+++void free_userpage(index_t index)
 ++{
 ++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FREE);
 ++	KASSERT(g_coremap.physicalpages[index].state != PAGE_FIXED);
@@ -22125,7 +22656,7 @@ index 0000000..184c18f
 ++	spinlock_release(&spinlkcore);
 ++}
 ++
-++void copy_page(int32_t dst, int32_t src)
+++void copy_page(index_t dst, index_t src)
 ++{
 ++	spinlock_acquire(&spinlkcore);
 ++	memcpy( (char*)PADDR_TO_KVADDR(PAGE_SIZE * dst), (char*)PADDR_TO_KVADDR(src * PAGE_SIZE), PAGE_SIZE);
@@ -22135,19 +22666,36 @@ index 0000000..184c18f
 ++void
 ++vm_tlbshootdown_all(void)
 ++{
-++	panic("dumbvm tried to do tlb shootdown?!\n");
+++	int spl = splhigh();
+++
+++	for (int i=0; i<NUM_TLB; i++) {
+++		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+++	}
+++	//as->tlbclock = 0;
+++	splx(spl);
 ++}
 ++
 ++void
 ++vm_tlbshootdown(const struct tlbshootdown *ts)
 ++{
-++	(void)ts;
-++	panic("dumbvm tried to do tlb shootdown?!\n");
+++	int spl = splhigh();
+++	uint32_t ehi, elo;
+++	//int32_t uberindex = VADDR_TO_UBERINDEX(ts->ts_vaddr);
+++	//int32_t subindex = VADDR_TO_SUBINDEX(ts->ts_vaddr);
+++	for (int i=0; i<NUM_TLB; i++) {
+++		tlb_read(&ehi, &elo, i);
+++		if(ehi == ts->ts_vaddr)
+++			tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+++	}
+++	//as->tlbclock = 0;
+++	splx(spl);
 ++}
 ++
 ++int
 ++vm_fault(int faulttype, vaddr_t faultaddress)
 ++{
+++	lock_acquire(g_swapper.lk_swapper);
+++
 ++	paddr_t paddr;
 ++	int i;
 ++	uint32_t ehi, elo;
@@ -22160,7 +22708,231 @@ index 0000000..184c18f
 ++	as = curthread->t_addrspace;
 ++	if (as == NULL) {
 ++
-++		// * No 
+++		// * No address space set up. This is probably a kernel
+++		// * fault early in boot. Return EFAULT so as to panic
+++		// * instead of getting into an infinite faulting loop.
+++		return EFAULT;
+++	}
+++	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
+++
+++
+++	if( (as->uberArray[uberIndex]== NULL || as->uberArray[uberIndex][subIndex] == NULL) && uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
+++		return EFAULT;
+++	if(uberIndex < STACK_MAX && !(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend))
+++	{
+++		switch (faulttype) {
+++		case VM_FAULT_READONLY:
+++			if( (as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
+++				return EFAULT;
+++			break;
+++		case VM_FAULT_READ:
+++			if((as->uberArray[uberIndex][subIndex]->permission & 0x4) == 0)
+++				return EFAULT;
+++			break;
+++		case VM_FAULT_WRITE:
+++			if((as->uberArray[uberIndex][subIndex]->permission & 0x2) == 0)
+++				return EFAULT;
+++			break;
+++		default:
+++			return EINVAL;
+++		}
+++	}
+++
+++
+++
+++	//if control comes here it means its not a segmentation fault
+++	//Address translation-> find paddr
+++
+++	if(uberIndex >= STACK_MAX)
+++	{
+++		//if last 1024 pages just assume its stack.... for now?
+++		if(as->uberArray[uberIndex]==NULL)
+++		{
+++			as_init_uberarray_section(as, uberIndex);
+++		}
+++		if(as->uberArray[uberIndex][subIndex] == NULL)
+++		{
+++			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
+++			as->uberArray[uberIndex][subIndex]->permission = 0x6;
+++			index_t index;
+++			int err= allocate_userpage(as, uberIndex, subIndex, &index);
+++			if(err)
+++				return err;
+++			as->uberArray[uberIndex][subIndex]->coremapindex = index;
+++			as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
+++		}
+++		if(as->as_sttop < faultaddress)
+++			as->as_sttop = faultaddress;
+++	}
+++	else if(faultaddress >= as->as_heapbase && faultaddress <= as->as_heapend)
+++	{
+++		if(as->uberArray[uberIndex]==NULL)
+++		{
+++			as_init_uberarray_section(as, uberIndex);
+++		}
+++		if(as->uberArray[uberIndex][subIndex] == NULL)
+++		{
+++			as->uberArray[uberIndex][subIndex] = as_init_virtualpage();
+++			as->uberArray[uberIndex][subIndex]->permission = 0x6;
+++			index_t index;
+++			int err= allocate_userpage(as, uberIndex, subIndex, &index);
+++			if(err)
+++				return err;
+++			as->uberArray[uberIndex][subIndex]->coremapindex = index;
+++			as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
+++		}
+++	}
+++	else if((as->uberArray[uberIndex][subIndex]->status & VPAGE_INMEMORY)==0 && (as->uberArray[uberIndex][subIndex]->status & VPAGE_INSWAP)==0)
+++	{
+++		KASSERT(as->uberArray[uberIndex] !=NULL );
+++		KASSERT(as->uberArray[uberIndex][subIndex] != NULL);
+++		index_t index;
+++		int err= allocate_userpage(as, uberIndex, subIndex, &index);
+++		if(err)
+++			return err;
+++		as->uberArray[uberIndex][subIndex]->coremapindex = index;
+++		as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
+++	}
+++	if( (as->uberArray[uberIndex][subIndex]->status & VPAGE_INMEMORY) == 0 && (as->uberArray[uberIndex][subIndex]->status & VPAGE_INSWAP) != 0)	//page needs to be swapped in
+++	{
+++		int err = swapin(as, uberIndex, subIndex);
+++		if(err)
+++			return err;
+++		as->uberArray[uberIndex][subIndex]->status |= VPAGE_INMEMORY;
+++	}
+++
+++	//we will check if the virtual page is in coremap or not....right now we are assuming it is in coremap.
+++
+++	KASSERT((as->uberArray[uberIndex][subIndex]->status & VPAGE_INMEMORY) != 0);
+++	paddr= PAGE_SIZE * as->uberArray[uberIndex][subIndex]->coremapindex;
+++
+++
+++	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].state != PAGE_FREE);
+++	//if(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != as && g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as != NULL)
+++	KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == as || g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex].as == NULL);
+++	//KASSERT(g_coremap.physicalpages[as->uberArray[uberIndex][subIndex]->coremapindex]);
+++	//KASSERT((paddr & PAGE_FRAME) == paddr);
+++
+++	// Disable interrupts on this CPU while frobbing the TLB.
+++	spl = splhigh();
+++
+++	for (i=0; i<NUM_TLB; i++) {
+++		tlb_read(&ehi, &elo, i);
+++		if (elo & TLBLO_VALID) {
+++			continue;
+++		}
+++		ehi = faultaddress;
+++		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+++		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
+++		tlb_write(ehi, elo, i);
+++		splx(spl);
+++		lock_release(g_swapper.lk_swapper);
+++
+++		return 0;
+++	}
+++
+++	as->tlbclock = (as->tlbclock + 1) % NUM_TLB;
+++	ehi = faultaddress;
+++	elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+++	DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
+++	tlb_write(ehi, elo, as->tlbclock);
+++	splx(spl);
+++	lock_release(g_swapper.lk_swapper);
+++
+++	return 0;
+++	//kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+++	//splx(spl);
+++	//return EFAULT;
+++
+++
+++}
+++void dumpcoremap(void)
+++{
+++	for(uint32_t i=0; i<g_coremap.numpages; i++)
+++	{
+++		kprintf("%d", g_coremap.physicalpages[i].state);
+++
+++	}
+++	kprintf("\n");
+++}
+++
+++int chooseframetoevict(index_t *retval)
+++{
+++	for(index_t i = (g_coremap.swapcounter + 1)%g_coremap.numpages ; i!= g_coremap.swapcounter; i=(i+1)%g_coremap.numpages)
+++	{
+++		if(g_coremap.physicalpages[i].state == PAGE_CLEAN || g_coremap.physicalpages[i].state == PAGE_DIRTY)
+++		{
+++			g_coremap.swapcounter = i;
+++			//			struct tlbshootdown ts;
+++			*retval = i;
+++			return 0;
+++		}
+++	}
+++	panic("Out of memory"); //no free page;
+++	return ENOMEM;
+++}
+++
+++index_t findfreeswapoffset()
+++{
+++	off_t retval = g_swapper.fileend;
+++	g_swapper.fileend += PAGE_SIZE;
+++	return (retval / PAGE_SIZE);
+++}
+++
+++void evict(index_t coremapindex)
+++{
+++	spinlock_acquire(&spinlkcore);
+++
+++	//KASSERT(g_coremap.physicalpages[coremapindex].state == PAGE_CLEAN);
+++	struct addrspace *as = g_coremap.physicalpages[coremapindex].as;
+++	int32_t uberindex = VADDR_TO_UBERINDEX(g_coremap.physicalpages[coremapindex].vpage);
+++	int32_t subindex = VADDR_TO_SUBINDEX(g_coremap.physicalpages[coremapindex].vpage);
+++	as->uberArray[uberindex][subindex]->status &= 0xFFFE;	//set the first bit to 0;
+++	g_coremap.physicalpages[coremapindex].state = PAGE_FREE;
+++	g_coremap.physicalpages[coremapindex].as = NULL;
+++	g_coremap.physicalpages[coremapindex].numallocations = 0;
+++	spinlock_release(&spinlkcore);
+++
+++}
+++
+++int writetoswap(index_t coremapindex, index_t *swapoffset)
+++{
+++	if(g_swapper.swapfile == NULL)
+++	{
+++		int err = vfs_open((char*)"os161.swap",O_RDWR|O_CREAT|O_TRUNC, 0, &g_swapper.swapfile);
+++		if(err)
+++			return err;
+++	}
+++	//struct addrspace *as = g_coremap.physicalpages[coremapindex].as;
+++	//KASSERT(*swapoffset != -1);
+++	struct iovec iov;
+++	struct uio ku;
+++	char *writebuf = (char*) ( PADDR_TO_KVADDR((coremapindex * PAGE_SIZE)));
+++	uio_kinit(&iov, &ku, writebuf, PAGE_SIZE, ( (*swapoffset) * PAGE_SIZE), UIO_WRITE);
+++	int err = vfs_write(g_swapper.swapfile, &ku);
+++	if(err)
+++	{
+++		return err;
+++	}
+++	g_coremap.physicalpages[coremapindex].state = PAGE_CLEAN;
+++	return 0;
+++}
+++
+++int readfromswap(index_t coremapindex, index_t swapoffset)
+++{
+++	KASSERT(g_swapper.swapfile != NULL);
+++	//KASSERT((swapoffset != -1));
+++
+++	struct iovec iov;
+++	struct uio ku;
+++	char *readbuf = (char*) ( PADDR_TO_KVADDR( (coremapindex * PAGE_SIZE)));
+++	uio_kinit(&iov, &ku, readbuf, PAGE_SIZE, (swapoffset * PAGE_SIZE), UIO_READ);
+++
+++	int err = vfs_read(g_swapper.swapfile, &ku);
+++	if(err)
+++	{
+++		return err;
+++
 \ No newline at end of file
 diff --git a/user/testbin/badcall/bad_execv.c b/user/testbin/badcall/bad_execv.c
 index 287a678..c0a6588 100644
@@ -22279,3 +23051,39 @@ index 0000000..50cb971
 +  // lseek(SEEK_END).
 + return 0;
 +} 
+diff --git a/user/testbin/swaptest/Makefile b/user/testbin/swaptest/Makefile
+new file mode 100644
+index 0000000..1cb6cc1
+--- /dev/null
++++ b/user/testbin/swaptest/Makefile
+@@ -0,0 +1,11 @@
++# Makefile for fileonlytest
++
++TOP=../../..
++.include "$(TOP)/mk/os161.config.mk"
++
++PROG=swaptest
++SRCS=swaptest.c
++BINDIR=/testbin
++
++.include "$(TOP)/mk/os161.prog.mk"
++
+diff --git a/user/testbin/swaptest/swaptest.c b/user/testbin/swaptest/swaptest.c
+new file mode 100644
+index 0000000..eac3ef4
+--- /dev/null
++++ b/user/testbin/swaptest/swaptest.c
+@@ -0,0 +1,13 @@
++#include<stdio.h>
++
++int
++main()
++{
++	int arr[231000],sum=0;
++	for(int i=0; i < 231000; i++)
++		arr[i]=i+10;
++	for(int i=0; i < 231000; i++)
++		sum += arr[i];
++	printf("sum=%d", sum);
++return 0;		
++}

@@ -105,7 +105,7 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 						copy_page(address, old->uberArray[i][j]->coremapindex);
 						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
 					}
-					else if( (old->uberArray[i][j]->swapfileoffset & VPAGE_INSWAP) != 0)
+					else if( ((old->uberArray[i][j]->status & VPAGE_INSWAP) != 0))
 					{
 						index_t address;
 						int err= allocate_userpage(newas, i, j, &address);
@@ -115,6 +115,11 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 						newas->uberArray[i][j]->coremapindex = address;
 						readfromswap(address, old->uberArray[i][j]->swapfileoffset);
 						newas->uberArray[i][j]->status = VPAGE_INMEMORY;
+					}
+					else
+					{
+						if(old->uberArray[i][j]->status != 0)
+							KASSERT((old->uberArray[i][j]->status == 0));
 					}
 
 				}
